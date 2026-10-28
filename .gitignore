@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+creds.json
+creds.*.json
+!creds.example.json

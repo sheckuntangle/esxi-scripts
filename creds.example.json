@@ -1,0 +1,6 @@
+{
+  "host": "esxi.example.com",
+  "user": "root",
+  "password": "replace-with-your-password",
+  "port": 22
+}
