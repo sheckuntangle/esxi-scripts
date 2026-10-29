@@ -5,6 +5,10 @@ import create_test_network as n
 
 
 class NetworkTests(unittest.TestCase):
+    @patch.dict('os.environ', {'ESXI_CREDS_FILE': '/private/job/creds.json'})
+    def test_job_credential_snapshot_used_without_extra_cli_inputs(self):
+        self.assertEqual(n.parser().parse_args(['lab']).creds_file, '/private/job/creds.json')
+
     @patch('create_test_network.remote')
     def test_csv_parses_embedded_commas(self, remote):
         remote.return_value = 'Name,Uplinks,\n"lab, one",,\n'

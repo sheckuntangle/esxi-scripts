@@ -4,3 +4,18 @@ __pycache__/
 creds.json
 creds.*.json
 !creds.example.json
+.creds-*.tmp
+OVA-download/*
+!OVA-download/.gitkeep
+
+# Local secrets and VM artifacts
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.ova
+*.iso
+*.vmdk
+.ssh/

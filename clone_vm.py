@@ -5,6 +5,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 import getpass
 import json
+import os
 from pathlib import Path
 import posixpath
 import re
@@ -17,6 +18,13 @@ import paramiko
 
 class CloneError(Exception):
     pass
+
+
+def load_ssh_host_keys(client, extra=None):
+    client.load_system_host_keys()
+    path = extra or os.environ.get("ESXI_KNOWN_HOSTS")
+    if path:
+        client.load_host_keys(path)
 
 
 def progress(message):
@@ -311,9 +319,7 @@ def main():
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_. -]{0,79}", args.clone_name):
         arg_parser.error("--clone-name must be 1–80 characters: letters, digits, spaces, '.', '_' or '-', starting with a letter or digit")
     client = paramiko.SSHClient()
-    client.load_system_host_keys()
-    if args.known_hosts:
-        client.load_host_keys(args.known_hosts)
+    load_ssh_host_keys(client, args.known_hosts)
     try:
         progress("Loading connection credentials")
         password = load_credentials(args)

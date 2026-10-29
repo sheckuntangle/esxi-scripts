@@ -1,0 +1,27 @@
+.git
+.agents
+.aws
+.codex
+.venv
+__pycache__
+**/__pycache__
+creds.json
+creds.*.json
+!creds.example.json
+.creds-*.tmp
+OVA-download
+*.ova
+*.iso
+*.vmdk
+
+# Local secrets and VM artifacts
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.ova
+*.iso
+*.vmdk
+.ssh/

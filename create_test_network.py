@@ -4,12 +4,13 @@
 import argparse
 import csv
 import io
+import os
 import re
 import sys
 
 import paramiko
 
-from clone_vm import CloneError, load_credentials, progress, remote
+from clone_vm import CloneError, load_credentials, load_ssh_host_keys, progress, remote
 
 
 def query(client, *args):
@@ -80,7 +81,7 @@ def create_network(client, name):
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("name", help="Name for both the vSwitch and port group")
-    result.set_defaults(creds_file=None, host=None, user=None, port=None)
+    result.set_defaults(creds_file=os.environ.get("ESXI_CREDS_FILE"), host=None, user=None, port=None)
     return result
 
 
@@ -95,7 +96,7 @@ def main():
         password = load_credentials(args)
         if password is None:
             raise CloneError("Set host, user, and password in creds.json beside this script")
-        client.load_system_host_keys()
+        load_ssh_host_keys(client)
         progress(f"Connecting to {args.host}:{args.port} as {args.user}")
         client.connect(args.host, port=args.port, username=args.user, password=password,
                        look_for_keys=False, allow_agent=False, timeout=20,

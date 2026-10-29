@@ -4,6 +4,11 @@
 import argparse
 import copy
 import getpass
+import json
+from pathlib import Path
+import paramiko
+from create_test_network import create_network, query
+from clone_vm import load_ssh_host_keys
 import posixpath
 import re
 import ssl
@@ -11,8 +16,9 @@ import sys
 import tarfile
 import threading
 import time
+from types import SimpleNamespace
 from urllib.parse import unquote, urlsplit, urlunsplit
-import xml.etree.ElementTree as ET
+from defusedxml import ElementTree as ET
 
 import requests
 from pyVim.connect import Disconnect, SmartConnect
@@ -58,7 +64,9 @@ def unique_named(items, name, description):
 
 def ova_descriptor(archive):
     members = {}
-    for member in archive.getmembers():
+    for count, member in enumerate(archive, 1):
+        if count > 10000:
+            raise CloneError("OVA contains too many archive members")
         name = posixpath.normpath(member.name)
         if name.startswith("/") or name == ".." or name.startswith("../"):
             raise CloneError(f"Unsafe OVA member: {member.name}")
@@ -74,7 +82,7 @@ def ova_descriptor(archive):
         raise CloneError("OVF descriptor is unexpectedly large")
     with archive.extractfile(members[name]) as stream:
         descriptor = stream.read().decode("utf-8-sig")
-    root = ET.fromstring(descriptor)
+    root = ET.fromstring(descriptor, forbid_dtd=True)
     if len(root.findall("ovf:VirtualSystem", NS)) != 1 or root.find("ovf:VirtualSystemCollection", NS) is not None:
         raise CloneError("Only single-VM OVAs are supported")
     if any(item.get(f"{{{OVF}}}compression", "identity") not in ("identity", "")
@@ -102,20 +110,95 @@ def ge6_index(root, override=None):
     return matches[0], len(nics)
 
 
-def configure_nics(spec, network, ge6, expected):
+def interface_labels(root):
+    labels = []
+    for item in root.findall(".//ovf:VirtualHardwareSection/ovf:Item", NS):
+        if item.findtext("rasd:ResourceType", namespaces=NS) != "10":
+            continue
+        metadata = " / ".join(item.findtext(f"rasd:{field}", default="", namespaces=NS) or ""
+                              for field in ("ElementName", "Caption", "Description", "Connection"))
+        matches = set(re.findall(r"\bGE[1-6]\b", metadata, re.I))
+        matches = {match.upper() for match in matches}
+        labels.append(next(iter(matches)) if len(matches) == 1 else
+                      item.findtext("rasd:ElementName", default=f"NIC {len(labels)+1}", namespaces=NS))
+    return labels
+
+
+def validate_nic_mappings(value):
+    if not isinstance(value, list) or len(value) > 128:
+        raise CloneError("Invalid interface mappings.")
+    result, seen = [], set()
+    for item in value:
+        if not isinstance(item, dict):
+            raise CloneError("Invalid interface mapping.")
+        index = item.get("index")
+        label, network = item.get("label"), item.get("network")
+        if type(index) is not int or not 1 <= index <= 128 or index in seen:
+            raise CloneError("Invalid or duplicate interface position.")
+        if not all(isinstance(v, str) and 0 < len(v) <= 256 and not any(ord(c) < 32 for c in v) for v in (label, network)):
+            raise CloneError("Invalid interface label or network name.")
+        if type(item.get("connected")) is not bool or type(item.get("create", False)) is not bool:
+            raise CloneError("Interface connection settings must be booleans.")
+        if item.get("create") and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_. -]{0,30}", network):
+            raise CloneError("New network names must be 1–31 letters, digits, spaces, '.', '_' or '-'.")
+        seen.add(index)
+        result.append(dict(index=index, label=label, network=network, connected=item["connected"], create=item.get("create", False)))
+    return result
+
+
+def create_nic_networks(args, password, overrides):
+    names = sorted({item["network"] for item in overrides if item.get("create")})
+    if not names:
+        return
+    if any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_. -]{0,30}", name) for name in names):
+        raise CloneError("Invalid new network name")
+    client = paramiko.SSHClient()
+    try:
+        load_ssh_host_keys(client)
+        client.connect(args.host, port=args.port or 22, username=args.user, password=password,
+                       look_for_keys=False, allow_agent=False, timeout=20, banner_timeout=20, auth_timeout=20)
+        existing = {row.get("Name") for row in query(client, "list")} | {row.get("Name") for row in query(client, "portgroup", "list")}
+        if any(name in existing for name in names):
+            raise CloneError("A requested new switch or port group already exists; select its existing network instead")
+        for name in names:
+            progress(f"Creating deployment network {name!r}; created networks are retained if deployment fails")
+            create_network(client, name)
+    finally:
+        client.close()
+
+
+def resolve_nic_settings(root, ge6, network, networks, overrides):
+    labels = interface_labels(root)
+    settings = [(network, i == ge6) for i in range(len(labels))]
+    seen = set()
+    for item in overrides:
+        index = item["index"] - 1
+        if index in seen or not 0 <= index < len(labels) or item["label"] != labels[index]:
+            raise CloneError("OVA interfaces changed; reload the interface list before deploying")
+        seen.add(index)
+        target = unique_named(networks, item["network"], "network")
+        if isinstance(target, vim.dvs.DistributedVirtualPortgroup):
+            raise CloneError("Only standard ESXi port groups are supported")
+        settings[index] = (target, item["connected"])
+    return settings
+
+
+def configure_nics(spec, network, ge6, expected, settings=None):
     nics = [change.device for change in spec.deviceChange or []
             if isinstance(change.device, vim.vm.device.VirtualEthernetCard)]
     if len(nics) != expected:
         raise CloneError("OVF and imported NIC counts differ; refusing to guess GE6")
+    settings = settings or [(network, i == ge6) for i in range(expected)]
     for index, nic in enumerate(nics):
+        target, connected = settings[index]
         nic.backing = vim.vm.device.VirtualEthernetCard.NetworkBackingInfo(
-            deviceName=network.name, network=network)
+            deviceName=target.name, network=target)
         nic.connectable = vim.vm.device.VirtualDevice.ConnectInfo(
-            startConnected=index == ge6, connected=False, allowGuestControl=False)
+            startConnected=connected, connected=False, allowGuestControl=False)
         # Leave address generation to ESXi instead of reusing an exported MAC.
         nic.addressType = "generated"
         nic.macAddress = None
-        progress(f"NIC {index + 1}: VM Network, {'enabled (GE6)' if index == ge6 else 'disconnected'}")
+        progress(f"NIC {index + 1}: {target.name}, {'connected at power on' if connected else 'disconnected'}")
     return [nic.key for nic in nics]
 
 
@@ -239,6 +322,9 @@ def upload(lease, archive, members, base, file_items, host, port, verify):
                 progress(f"ESXi accepted {item.path}")
         if errors:
             raise CloneError(f"Upload lease heartbeat failed: {errors[0]}")
+    except requests.RequestException:
+        # Lease URLs contain temporary authorization; raw HTTP errors can reveal them.
+        raise CloneError("ESXi payload upload failed. Check connectivity and inspect the VM before retrying.") from None
     finally:
         stop.set()
         thread.join()
@@ -279,7 +365,7 @@ def cdrom_change(devices, iso):
     return changes
 
 
-def finish_vm(vm, iso, network, ge6):
+def finish_vm(vm, iso, network, ge6, settings=None):
     progress("Applying final network and ISO settings")
     if vm.runtime.powerState != "poweredOff":
         raise CloneError("Imported VM unexpectedly powered on; refusing to reconfigure")
@@ -288,17 +374,19 @@ def finish_vm(vm, iso, network, ge6):
         raise CloneError("Imported VM is missing GE6")
     spec = vim.vm.ConfigSpec(bootOptions=vim.vm.BootOptions(enterBIOSSetup=False))
     spec.deviceChange = cdrom_change(vm.config.hardware.device, iso)
+    settings = settings or [(network, i == ge6) for i in range(len(nics))]
     for index, device in enumerate(nics):
+        target, connected = settings[index]
         nic = copy.deepcopy(device)
-        nic.backing = vim.vm.device.VirtualEthernetCard.NetworkBackingInfo(deviceName=network.name, network=network)
+        nic.backing = vim.vm.device.VirtualEthernetCard.NetworkBackingInfo(deviceName=target.name, network=target)
         nic.connectable = vim.vm.device.VirtualDevice.ConnectInfo(
-            startConnected=index == ge6, connected=False, allowGuestControl=False)
+            startConnected=connected, connected=False, allowGuestControl=False)
         spec.deviceChange.append(vim.vm.device.VirtualDeviceSpec(operation="edit", device=nic))
     wait_task(vm.ReconfigVM_Task(spec=spec), "VM configuration")
     config = vm.config
     actual_nics = [device for device in config.hardware.device if isinstance(device, vim.vm.device.VirtualEthernetCard)]
     if len(actual_nics) != len(nics) or any(
-            nic.backing.network != network or nic.connectable.startConnected != (index == ge6)
+            nic.backing.network != settings[index][0] or nic.connectable.startConnected != settings[index][1]
             or nic.connectable.allowGuestControl for index, nic in enumerate(actual_nics)):
         raise CloneError("Network configuration verification failed")
     if not any(isinstance(device, vim.vm.device.VirtualCdrom)
@@ -325,6 +413,13 @@ def deploy(args):
     password = load_credentials(args)
     if password is None:
         password = getpass.getpass(f"Password for {args.user}@{args.host}: ")
+    overrides = []
+    if getattr(args, "nic_config", None):
+        with args.nic_config.open("rb") as stream:
+            raw = stream.read(64 * 1024 + 1)
+        if len(raw) > 64 * 1024:
+            raise CloneError("Interface configuration is too large")
+        overrides = validate_nic_mappings(json.loads(raw))
     context = ssl._create_unverified_context() if args.insecure else ssl.create_default_context(cafile=args.ca_file)
     verify = False if args.insecure else args.ca_file or True
     service, lease, imported = None, None, False
@@ -347,6 +442,10 @@ def deploy(args):
             network = unique_named(host.network, "VM Network", "network")
             if isinstance(network, vim.dvs.DistributedVirtualPortgroup):
                 raise CloneError("This script requires a standard VM Network port group")
+            # Validate every mapping and existing target before creating networks.
+            pending = {item["network"] for item in overrides if item.get("create")}
+            resolve_nic_settings(root, ge6, network,
+                list(host.network) + [SimpleNamespace(name=name) for name in pending], overrides)
             iso_datastore = unique_named(host.datastore, args.iso_datastore or args.datastore, "ISO datastore")
             iso = find_iso(iso_datastore, args.iso_folder)
             datacenter = host.parent
@@ -365,16 +464,18 @@ def deploy(args):
                 progress(f"OVA warning: {warning.localizedMessage}")
             if result.error:
                 raise CloneError("OVA validation failed: " + "; ".join(error.localizedMessage for error in result.error))
-            configure_nics(result.importSpec.configSpec, network, ge6, nic_count)
+            create_nic_networks(args, password, overrides)
+            settings = resolve_nic_settings(root, ge6, network, host.network, overrides)
+            configure_nics(result.importSpec.configSpec, network, ge6, nic_count, settings)
             result.importSpec.configSpec.bootOptions = vim.vm.BootOptions(enterBIOSSetup=False)
             progress(f"Deploying {args.name!r} to {datastore.name}; VM will remain powered off")
             lease = host.parent.resourcePool.ImportVApp(spec=result.importSpec,
                 folder=datacenter.vmFolder, host=host)
             vm = upload(lease, archive, members, base, result.fileItem, args.host, args.https_port, verify)
             imported = True
-            finish_vm(vm, iso, network, ge6)
+            finish_vm(vm, iso, network, ge6, settings)
             disable_autostart(host, vm)
-            progress(f"Deployment complete: {vm.name} ({vm._moId}). Powered off. Only GE6 enabled; all NICs on VM Network.")
+            progress(f"Deployment complete: {vm.name} ({vm._moId}). Powered off. Interface mappings and connection settings applied.")
             progress(f"CD/DVD: {iso}.")
     except BaseException:
         if lease is not None and not imported:
@@ -402,6 +503,7 @@ def parser():
     result.add_argument("--datastore", default="datastore1")
     result.add_argument("--iso-datastore", help="ISO datastore, defaults to deployment datastore")
     result.add_argument("--iso-folder", default="00-ISO")
+    result.add_argument("--nic-config", type=Path, help="JSON per-interface mappings (index, label, network, connected)")
     result.add_argument("--ge6-nic", type=int, help="Override GE6 detection using 1-based OVF NIC order")
     result.add_argument("--disk-format", choices=("thin", "thick", "eagerZeroedThick"), default="thin")
     tls = result.add_mutually_exclusive_group()

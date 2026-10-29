@@ -1,0 +1,29 @@
+services:
+  gui:
+    build:
+      context: .
+      network: host
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    init: true
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - .:/workspace
+      - ${HOST_CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}:/etc/ssl/certs/host-ca-certificates.crt:ro
+      - ${HOST_KNOWN_HOSTS:-${HOME}/.ssh/known_hosts}:/etc/esxi/known_hosts:ro
+    environment:
+      REQUESTS_CA_BUNDLE: /etc/ssl/certs/host-ca-certificates.crt
+      SSL_CERT_FILE: /etc/ssl/certs/host-ca-certificates.crt
+      ESXI_KNOWN_HOSTS: /etc/esxi/known_hosts
+      MAX_OVA_DOWNLOAD_BYTES: ${MAX_OVA_DOWNLOAD_BYTES:-53687091200}
+    restart: unless-stopped
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

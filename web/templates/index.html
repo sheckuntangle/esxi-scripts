@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QA OVA Deployment Tool · OVA deployment</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="QA OVA Deployment Tool home"><span class="brand-mark">e<span>▰</span></span><span class="tool-brand">QA OVA<span class="brand-sub">Deployment Tool</span></span></a>
+    <p class="nav-caption">WORKSPACE</p>
+    <nav class="workspace-tabs" role="tablist" aria-label="Workspace sections">
+      <button id="tab-deployment" class="nav-active" role="tab" aria-selected="true" aria-controls="deployment-panel" type="button"><span class="nav-icon" aria-hidden="true">↗</span> Deployment <span class="nav-dot" aria-hidden="true"></span></button>
+      <button id="tab-misc" role="tab" aria-selected="false" aria-controls="misc-panel" tabindex="-1" type="button"><span class="nav-icon" aria-hidden="true">⌘</span> Misc ESXi Actions</button>
+    </nav>
+    <div class="sidebar-note"><span class="status-dot"></span> Local workspace<p>Deploy appliances.<br>Keep control of your lab.</p></div>
+    <div class="sidebar-footer">ESXi scripts<span>Docker workspace</span></div>
+  </aside>
+
+  <main>
+    <header class="topbar"><span>Workspace <span class="slash">/</span> <strong id="breadcrumb">Deployment</strong></span><span class="local-badge"><span class="status-dot"></span> LOCAL CONSOLE</span></header>
+    <div class="page">
+      <div class="page-heading"><div><p id="page-eyebrow" class="eyebrow">DEPLOY & CONFIGURE</p><h1 id="page-title">Velo OVA deployment tool for testing</h1><p id="page-subtitle" class="subtitle">Download appliances to your library, then deploy them to your ESXi host.</p></div><span id="page-tag" class="version-tag">OVA WORKFLOW</span></div>
+
+      <section class="connection card" aria-labelledby="connection-heading">
+        <div class="section-heading"><div class="heading-icon">⌁</div><div><h2 id="connection-heading">ESXi connection</h2><p>Saved locally and available after a restart.</p></div><span id="connection-status" class="pill">Not configured</span></div>
+        <form id="connection-form">
+          <div class="connection-fields">
+            <label>IP address or hostname<input id="host" name="host" required placeholder="esxi.example.com" autocomplete="off"></label>
+            <label>Username<input id="user" name="user" required placeholder="root" autocomplete="username"></label>
+            <label>Password<input id="password" name="password" type="password" placeholder="Enter password" autocomplete="current-password"><span id="password-help" class="field-help">Stored in your local creds.json.</span></label>
+            <button class="button secondary save-button" id="save-connection" type="submit">Save connection <span>↗</span></button>
+          </div>
+          <p id="connection-message" class="message" role="status"></p>
+        </form>
+      </section>
+
+      <div id="deployment-panel" role="tabpanel" aria-labelledby="tab-deployment">
+      <section class="library card" aria-labelledby="library-heading">
+        <div class="section-heading"><div class="heading-icon">▤</div><div><h2 id="library-heading">Downloaded OVAs</h2><p>Your saved appliances, ready for another deployment.</p></div><span id="library-count" class="pill">0 files</span><button id="refresh-library" class="button secondary" type="button">Refresh</button></div>
+        <form id="download-form"><fieldset id="download-fields">
+          <div class="download-fields">
+            <label>OVA download link <span class="required">*</span><input id="ova-url" name="url" type="url" required placeholder="https://example.com/appliance.ova" autocomplete="off"><span class="field-help">HTTP or HTTPS. Signed download links are supported.</span></label>
+            <label>Save file as <span class="optional">optional</span><input id="filename" name="filename" placeholder="Use the name from the link" autocomplete="off"><span class="field-help">Saved in OVA-download/</span></label>
+            <button id="download-button" class="button primary" type="submit">Download OVA</button>
+          </div>
+          <label class="check"><input id="reuse-existing" type="checkbox"><span>Reuse this file if already downloaded</span></label>
+          <p id="download-message" class="message error" role="alert"></p>
+        </fieldset></form>
+        <p id="library-message" class="message" role="status"></p>
+        <div class="library-scroll"><table class="library-table"><thead><tr><th>File name</th><th>Size</th><th>Saved</th><th>Actions</th></tr></thead><tbody id="library-files"></tbody></table></div>
+        <p id="library-empty" class="library-empty">No downloaded OVAs yet. Completed downloads will appear here.</p>
+      </section>
+
+      <div class="workspace-grid">
+        <section class="deployment card" aria-labelledby="deployment-heading">
+          <div class="section-heading"><div class="heading-icon">↗</div><div><h2 id="deployment-heading">Deploy an appliance</h2><p>Choose a downloaded OVA and a VM name.</p></div></div>
+          <form id="deploy-form">
+            <fieldset id="deployment-fields">
+              <label>Saved OVA <span class="required">*</span><select id="saved-file" required><option value="">Select a downloaded OVA</option></select><span class="field-help">Choose a file from Downloaded OVAs above.</span></label>
+              <label>New VM name <span class="required">*</span><input id="vm-name" name="name" required maxlength="80" placeholder="my-appliance-01" autocomplete="off"></label>
+              <details class="advanced" id="interface-options"><summary>Interface networks <span>+</span></summary><div class="advanced-body">
+                <p class="field-help">Select a saved OVA to configure its interfaces. Networks are ESXi port groups.</p>
+                <button id="refresh-interfaces" class="button secondary" type="button">Load / refresh interfaces and networks</button>
+                <p id="interface-message" class="message" role="status"></p><div id="interface-rows"></div>
+                <p class="field-help">“Create new” creates an isolated vSwitch and same-named port group during deployment, with security enabled and inherited port group policies. Connected means connect at the next power on; the VM stays off.</p>
+              </div></details>
+              <details class="advanced"><summary>Deployment options <span>+</span></summary><div class="advanced-body"><div class="field-row"><label>Datastore<input id="datastore" value="datastore1" required></label><label>ISO folder<input id="iso-folder" value="00-ISO" required></label></div><label>GE6 NIC position <span class="optional">optional</span><input id="ge6-nic" type="number" min="1" max="128" placeholder="Detect from the OVA labels"><span class="field-help">Only set this if the OVA does not label GE6.</span></label></div></details>
+              <div class="deployment-policy"><span class="small-symbol">◇</span><div><strong>Your deployment defaults</strong><p>Default: all NICs → VM Network · Only GE6 connected<br>Cloud-init ISO attached · VM stays powered off</p></div></div>
+              <p id="deploy-message" class="message error" role="alert"></p>
+              <button id="deploy-button" class="button primary" type="submit"><span>Deploy saved OVA</span><span>↗</span></button>
+            </fieldset>
+          </form>
+        </section>
+
+        <section class="output card" aria-labelledby="output-heading">
+          <div class="section-heading"><div class="heading-icon terminal-icon">›_</div><div><h2 id="output-heading">Live output</h2><p id="job-caption">Follow every step from download to deployment.</p></div><span id="job-status" class="pill">Ready</span></div>
+          <div class="progress-area"><div class="progress-label"><span id="phase-label">Waiting for a deployment</span><strong id="progress-label">—</strong></div><progress id="job-progress" value="0" max="100" aria-label="Current step progress"></progress><div class="stage-labels"><span id="stage-download">01 <b>Download</b></span><span id="stage-deploy">02 <b>Deploy</b></span><span id="stage-done">03 <b>Complete</b></span></div></div>
+          <div class="console-toolbar"><span><span class="status-dot" id="console-dot"></span> ACTIVITY LOG</span><button id="copy-output" type="button">Copy output</button></div>
+          <div class="console-wrap"><div id="console-empty" class="console-empty"><span>›_</span><strong>Your next deployment starts here.</strong><p>Progress and script output will appear in real time.<br>You can keep this page open or return while it runs.</p></div><pre id="console" class="console-log" aria-label="Deployment log" tabindex="0"></pre></div>
+          <div class="output-footer"><span>●</span> Downloads stay in your workspace. The deployed VM stays off.</div>
+        </section>
+      </div>
+      </div>
+      <div id="misc-panel" role="tabpanel" aria-labelledby="tab-misc" hidden>
+        <div class="workspace-grid misc-grid">
+          <div class="misc-forms">
+            <section class="deployment card" aria-labelledby="clone-heading">
+              <div class="section-heading"><div class="heading-icon">⧉</div><div><h2 id="clone-heading">Clone a VM</h2><p>Create an independent clone on the same ESXi host.</p></div></div>
+              <form id="clone-form"><fieldset id="clone-fields">
+                <label for="clone-source">Source VM <span class="required">*</span></label><div class="vm-picker"><select id="clone-source" required aria-describedby="vm-list-message"><option value="">Load VMs from the saved ESXi connection</option></select><button id="refresh-vms" class="button secondary" type="button">Refresh</button></div><p id="vm-list-message" class="field-help" role="status">The VM list loads from your configured ESXi server.</p>
+                <label>New clone name <span class="required">*</span><input id="clone-name" required maxlength="80" placeholder="ubuntu-02" autocomplete="off"></label>
+                <label>Destination datastore <span class="optional">optional</span><input id="clone-datastore" placeholder="Use the source VM's datastore" autocomplete="off"></label>
+                <div class="deployment-policy action-policy"><span class="small-symbol">◇</span><div><strong>Source VM shutdown is automatic</strong><p>Graceful shutdown first; forced power-off if needed.<br>Source and clone stay off. Clone adapters connect at startup.</p></div></div>
+                <p id="clone-message" class="message error" role="alert"></p>
+                <button id="clone-button" class="button primary" type="submit"><span>Clone VM</span><span>↗</span></button>
+              </fieldset></form>
+            </section>
+            <section class="deployment card" aria-labelledby="network-heading">
+              <div class="section-heading"><div class="heading-icon">⌁</div><div><h2 id="network-heading">Create an internal network</h2><p>A vSwitch and port group for isolated testing.</p></div></div>
+              <form id="network-form"><fieldset id="network-fields">
+                <label>Network name <span class="required">*</span><input id="network-name" required maxlength="31" placeholder="lab-network-01" autocomplete="off"><span class="field-help">The vSwitch and port group use this same name.</span></label>
+                <div class="deployment-policy action-policy"><span class="small-symbol">◇</span><div><strong>No physical uplinks</strong><p>Promiscuous mode, MAC changes, and forged transmits enabled.<br>All port group policies inherit from the switch.</p></div></div>
+                <p id="network-message" class="message error" role="alert"></p>
+                <button id="network-button" class="button primary" type="submit"><span>Create network</span><span>↗</span></button>
+              </fieldset></form>
+            </section>
+            <p class="ssh-note">SSH must be enabled on ESXi. These actions use the host's trusted SSH keys.</p>
+          </div>
+        <section class="output card" aria-labelledby="misc-output-heading">
+          <div class="section-heading"><div class="heading-icon terminal-icon">›_</div><div><h2 id="misc-output-heading">Live output</h2><p id="misc-job-caption">Follow cloning and network creation in real time.</p></div><span id="misc-job-status" class="pill">Ready</span></div>
+          <div class="progress-area"><div class="progress-label"><span id="misc-phase-label">Waiting for an action</span><strong id="misc-progress-label">—</strong></div><progress id="misc-job-progress" value="0" max="100" aria-label="Current action progress"></progress><div class="stage-labels"><span id="misc-stage-start">01 <b>Start</b></span><span id="misc-stage-action">02 <b>Run</b></span><span id="misc-stage-done">03 <b>Complete</b></span></div></div>
+          <div class="console-toolbar"><span><span class="status-dot" id="misc-console-dot"></span> ACTIVITY LOG</span><button id="misc-copy-output" type="button">Copy output</button></div>
+          <div class="console-wrap"><div id="misc-console-empty" class="console-empty"><span>›_</span><strong>Your next lab action starts here.</strong><p>Progress and script output will appear in real time.<br>You can keep this page open or return while it runs.</p></div><pre id="misc-console" class="console-log" aria-label="ESXi actions log" tabindex="0"></pre></div>
+          <div class="output-footer"><span>●</span> Uses the saved ESXi connection. One action runs at a time.</div>
+        </section>
+        </div>
+      </div>
+      <footer class="page-footer">QA OVA Deployment Tool <span>Built for your lab. Runs on your machine.</span></footer>
+    </div>
+  </main>
+</body>
+</html>

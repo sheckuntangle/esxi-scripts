@@ -17,8 +17,55 @@ def descriptor(labels):
 
 
 class DeployTests(unittest.TestCase):
+    def test_ova_rejects_dtd_and_excessive_archive_members(self):
+        payload = ('<!DOCTYPE Envelope [<!ENTITY x "expanded">]>' + descriptor(['GE6'])).encode()
+        archive = Mock()
+        member = tarfile.TarInfo('vm.ovf'); member.size = len(payload)
+        archive.__iter__ = Mock(return_value=iter([member]))
+        archive.extractfile.return_value = io.BytesIO(payload)
+        with self.assertRaises(Exception) as caught:
+            d.ova_descriptor(archive)
+        self.assertIn('DTDForbidden', type(caught.exception).__name__)
+        archive.__iter__ = Mock(return_value=(tarfile.TarInfo(f'{i}.txt') for i in range(10001)))
+        with self.assertRaisesRegex(d.CloneError, 'too many'):
+            d.ova_descriptor(archive)
+
+    @patch('deploy_ova.SmartConnect')
+    @patch('deploy_ova.load_credentials', return_value='secret')
+    def test_cli_rejects_invalid_mapping_before_esxi_connection(self, credentials, connect):
+        import tempfile
+        from pathlib import Path
+        import json
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/'interfaces.json'
+            path.write_text(json.dumps([dict(index=True, label='GE1', network='lab', connected=True)]))
+            with self.assertRaises(d.CloneError):
+                d.deploy(SimpleNamespace(nic_config=path))
+        connect.assert_not_called()
+
+    @patch('deploy_ova.requests.Session')
+    def test_upload_error_hides_temporary_lease_token(self, session):
+        lease = Mock(); lease.state = vim.HttpNfcLease.State.ready
+        lease.info.deviceUrl = [SimpleNamespace(importKey='disk', url='https://esxi.test/upload?token=private-lease-token')]
+        session.return_value.__enter__.return_value.request.side_effect = d.requests.ConnectionError('https://esxi.test/upload?token=private-lease-token')
+        archive = Mock(); archive.extractfile.return_value = io.BytesIO(b'abc')
+        member = tarfile.TarInfo('disk.vmdk'); member.size=3
+        item = SimpleNamespace(path='disk.vmdk',deviceId='disk',size=3,create=True)
+        with self.assertRaises(d.CloneError) as caught:
+            d.upload(lease, archive, {'disk.vmdk':member}, '', [item], 'esxi.test', 443, False)
+        self.assertNotIn('private-lease-token', str(caught.exception))
+        lease.HttpNfcLeaseComplete.assert_not_called()
+
     def test_ge6_uses_label_not_assumed_sixth_slot(self):
         self.assertEqual(d.ge6_index(ET.fromstring(descriptor(['GE1', 'GE6', 'GE2']))), (1, 3))
+
+    def test_interface_labels_use_ge_names_in_metadata_without_assuming_order(self):
+        root = ET.fromstring(descriptor(['Network adapter 1', 'Network adapter 2']))
+        items = root.findall('.//ovf:Item', d.NS)
+        ET.SubElement(items[0], '{'+d.RASD+'}Description').text = 'VmxNet3 ethernet adapter GE6'
+        ET.SubElement(items[0], '{'+d.RASD+'}Connection').text = 'GE6'
+        ET.SubElement(items[1], '{'+d.RASD+'}Connection').text = 'GE1'
+        self.assertEqual(d.interface_labels(root), ['GE6', 'GE1'])
 
     def test_unlabelled_and_duplicate_ge6_require_override(self):
         for labels in (['Ethernet 1', 'Ethernet 2'], ['GE6', 'GE6']):
@@ -44,6 +91,45 @@ class DeployTests(unittest.TestCase):
             self.assertFalse(nic.connectable.connected)
             self.assertEqual(nic.addressType, 'generated')
             self.assertIsNone(nic.macAddress)
+
+    def test_per_interface_network_and_connection_overrides(self):
+        root = ET.fromstring(descriptor(['GE1', 'GE6', 'GE2']))
+        default, internal = vim.Network('default'), vim.Network('internal')
+        with patch.object(vim.Network, 'name', new_callable=lambda: property(lambda n: 'VM Network' if n == default else 'lab')):
+            settings = d.resolve_nic_settings(root, 1, default, [default, internal],
+                [dict(index=1, label='GE1', network='lab', connected=True)])
+            self.assertEqual(settings, [(internal, True), (default, True), (default, False)])
+            nics = [vim.vm.device.VirtualVmxnet3(key=4000+i) for i in range(3)]
+            spec = vim.vm.ConfigSpec(deviceChange=[vim.vm.device.VirtualDeviceSpec(operation='add', device=n) for n in nics])
+            d.configure_nics(spec, default, 1, 3, settings)
+            self.assertEqual([n.backing.network for n in nics], [internal, default, default])
+            self.assertEqual([n.connectable.startConnected for n in nics], [True, True, False])
+            self.assertFalse(any(n.connectable.connected for n in nics))
+
+    def test_mapping_rejects_changed_ova_and_unknown_network_before_mutation(self):
+        root = ET.fromstring(descriptor(['GE1', 'GE6']))
+        for mapping in (dict(index=3, label='GE1', network='missing', connected=True),
+                        dict(index=1, label='Wrong label', network='missing', connected=True),
+                        dict(index=1, label='GE1', network='missing', connected=True)):
+            with self.assertRaises(d.CloneError):
+                d.resolve_nic_settings(root, 1, Mock(), [], [mapping])
+
+    @patch('deploy_ova.create_network')
+    @patch('deploy_ova.query')
+    @patch('deploy_ova.load_ssh_host_keys')
+    @patch('deploy_ova.paramiko.SSHClient')
+    def test_new_network_reuses_script_and_deduplicates_shared_targets(self, ssh, keys, query, create):
+        query.return_value = []
+        mappings = [dict(network='lab', create=True), dict(network='lab', create=True)]
+        args = SimpleNamespace(host='esxi.test', port=22, user='test')
+        d.create_nic_networks(args, 'secret', mappings)
+        create.assert_called_once_with(ssh.return_value, 'lab')
+        ssh.return_value.close.assert_called_once()
+        create.reset_mock()
+        query.return_value = [dict(Name='lab')]
+        with self.assertRaises(d.CloneError):
+            d.create_nic_networks(args, 'secret', mappings)
+        create.assert_not_called()
 
     def test_nic_count_mismatch_aborts(self):
         with self.assertRaises(d.CloneError):
@@ -141,6 +227,22 @@ class DeployTests(unittest.TestCase):
         self.assertFalse(vm.config.bootOptions.enterBIOSSetup)
         vm.PowerOnVM_Task.assert_not_called()
         vm.PowerOffVM_Task.assert_not_called()
+
+    @patch('deploy_ova.wait_task')
+    def test_final_configuration_preserves_custom_networks_and_connection_flags(self, wait):
+        default, lab = vim.Network('default'), vim.Network('lab')
+        vm = Mock(); vm.runtime.powerState = 'poweredOff'
+        vm.config.hardware.device = [vim.vm.device.VirtualVmxnet3(key=4000+i) for i in range(3)]
+        def reconfigure(spec):
+            vm.config.bootOptions = spec.bootOptions
+            vm.config.hardware.device = [change.device for change in spec.deviceChange]
+        vm.ReconfigVM_Task.side_effect = reconfigure
+        settings = [(lab, True), (default, True), (lab, False)]
+        with patch.object(vim.Network, 'name', new_callable=lambda: property(lambda n: 'VM Network' if n == default else 'lab')):
+            d.finish_vm(vm, '[ds] cloud-init.iso', default, 1, settings)
+        nics = [n for n in vm.config.hardware.device if isinstance(n, vim.vm.device.VirtualEthernetCard)]
+        self.assertEqual([(n.backing.network, n.connectable.startConnected) for n in nics], settings)
+        vm.PowerOnVM_Task.assert_not_called()
 
     def test_final_configuration_refuses_running_vm(self):
         vm = Mock()

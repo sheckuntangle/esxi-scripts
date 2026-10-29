@@ -1,4 +1,143 @@
-# Clone a VM on the same ESXi host
+# ESXi scripts
+
+Security model, review results, and retained lab tradeoffs: [SECURITY.md](SECURITY.md).
+
+## Web GUI with Docker
+
+Start the OVA deployment GUI from this repository:
+
+```bash
+docker compose up -d --build
+```
+
+Open **http://localhost:8080**. In **Downloaded OVAs**, supply an HTTP/HTTPS
+OVA download link and click **Download OVA**. An optional **Save file as** field
+renames the download; otherwise the file name comes from the link. Links
+without an OVA filename need an explicit name. `.ova` is added if omitted.
+Downloads do not require an ESXi connection or a VM name. Each download
+is limited to 50 GiB by default; set `MAX_OVA_DOWNLOAD_BYTES` when recreating
+the container to change it. Downloads stop before using the last 1 GiB of free
+disk space. This limit applies to the downloaded file, not its virtual disks.
+
+The GUI saves downloads into **`OVA-download/` in this repository**. The library
+lists completed files with their size and saved date, and refreshes automatically.
+Existing files are never overwritten; **Reuse this file if already downloaded**
+lets you keep a previously saved file. **Delete** removes the saved file after
+confirmation, without modifying any deployed VM. Files in use cannot be deleted;
+partial downloads and symbolic links are excluded from the library.
+
+To deploy, save the ESXi connection, choose **Use for deployment** in the library
+or select a file in the deployment form's **Saved OVA** dropdown, and enter the
+new VM name. **Deploy an appliance** accepts only previously downloaded OVAs.
+Downloading and deploying are separate actions. Both show progress and output
+in the live output window, and you can return to a running action after refreshing
+the browser. Only one action runs at a time across both tabs.
+
+Expand **Deployment options** for datastore, ISO folder, and optional GE6 NIC
+position. The GUI automatically accepts self-signed ESXi certificates. OVA
+download certificates are still verified. The existing deployment defaults apply:
+all NICs use `VM Network`, only GE6 connects at startup, the cloud-init ISO is
+attached, automatic startup is disabled, and the VM remains off with normal
+boot settings.
+
+Expand **Interface networks** to map each OVA adapter to an ESXi standard port
+group and choose whether it connects at power on. The tool reads the actual
+interface labels from the selected saved OVA. Click **Load / refresh interfaces and networks**
+to reload the available port groups from the saved ESXi connection. Initially,
+all adapters use `VM Network`, with only GE6 checked as connected. Changing a
+network does not automatically check Connected.
+
+Choose **Create new…** beside any interface and enter a name to create an
+isolated vSwitch and same-named port group during deployment. This reuses the
+network script: no uplinks, all three security options enabled on the switch,
+and inherited port group policies. Multiple interfaces can share the same new
+name; it is created once. Creating networks requires SSH access and trusted
+host keys. Created networks remain if deployment later fails; select the
+existing network when retrying. The VM stays powered off.
+
+`creds.json` and `OVA-download/` are bind-mounted from this repository, so they
+survive container restart, recreation, and image rebuilds. Credentials are
+saved atomically with owner-only permissions. The saved password is never sent
+back to the browser; leave it blank to retain it for the same host/user. Each
+job uses a private temporary credential snapshot. Credentials and downloads
+are excluded from Git and Docker image builds.
+
+The **Deployment** tab contains the OVA library, deployment form, and its live
+output window. The **Misc ESXi Actions** tab adds:
+
+- **Clone a VM**: select a source VM from the configured ESXi host and enter a new clone name, with an
+  optional destination datastore. The list loads automatically; use **Refresh** to reload it.
+  VM IDs distinguish machines with duplicate names. SSH access to ESXi is required.
+  The existing cloning script automatically
+  shuts down the source (graceful first, forced if needed), copies disks, and
+  leaves source and clone off. Clone adapters connect at startup.
+- **Create an internal network**: enter a name for both vSwitch and port group.
+  The switch has no uplinks and enables all three security options. Port group
+  policies inherit.
+
+Both actions use the shared connection and show live script output on the Misc
+tab. One action runs at a time across both tabs; changing tabs or refreshing
+does not stop it. These two actions require ESXi SSH access. Docker mounts your
+`~/.ssh/known_hosts` read-only, so trusted host keys are shared without mounting
+private SSH keys. Set `HOST_KNOWN_HOSTS=/path/to/known_hosts` if stored elsewhere.
+If the file does not exist, first connect with `ssh user@esxi-host` and verify
+the host fingerprint before accepting it. New/changed keys remain rejected.
+
+```bash
+docker compose logs -f gui
+docker compose restart gui
+docker compose down
+```
+
+Restarting/stopping the container during a deployment interrupts the job.
+Inspect ESXi before retrying an interrupted import. The live log and job status
+are held in memory and reset on a server restart; saved credentials and OVA
+files remain on disk. Partial failed downloads are removed automatically.
+
+The container runs as UID/GID 1000 by default. If your checkout is owned by a
+different user, set the matching IDs when starting it:
+
+```bash
+LOCAL_UID=$(id -u) LOCAL_GID=$(id -g) docker compose up -d --build
+```
+
+Image builds use host networking to fetch Python dependencies. The running GUI
+uses its own Docker network and publishes only the localhost port above.
+The GUI has no application login: access to this port grants control through
+the saved ESXi account. Keep it local; see [SECURITY.md](SECURITY.md) before
+changing its network exposure.
+
+The GUI trusts the Docker host's CA bundle, mounted read-only from
+`/etc/ssl/certs/ca-certificates.crt`. This lets internal download servers use the
+same corporate CAs trusted by your machine, with HTTPS verification enabled.
+If the bundle is elsewhere on your host, set `HOST_CA_BUNDLE` when starting it:
+
+```bash
+HOST_CA_BUNDLE=/path/to/ca-bundle.pem docker compose up -d --build
+```
+
+No CA certificates are copied into the image or repository. This setting applies
+to downloads; the GUI accepts ESXi certificates automatically.
+
+The GUI is intended for a single local administrator and binds only to
+`127.0.0.1:8080`. It has no login screen. For access from another machine, use
+an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 user@docker-host`) and open
+`http://localhost:8080` locally. Keep it behind authentication and HTTPS if
+you choose to expose it more broadly. The application accepts localhost host
+headers only and rejects browser cross-origin writes.
+
+For local development and the complete test suite:
+
+```bash
+python3 -m pip install -r requirements-web.txt
+gunicorn --bind 127.0.0.1:8080 --workers 1 --threads 16 --timeout 0 'web.app:create_app()'
+python3 -m unittest discover -s tests -v
+```
+
+Use one web worker: its background job and live log are shared between threads
+within that process.
+
+## Command-line scripts
 
 `clone_vm.py` creates an independent, full disk clone on a standalone ESXi
 server using SSH, `vmkfstools`, and `vim-cmd`. It does not require vCenter.

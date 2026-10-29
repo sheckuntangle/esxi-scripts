@@ -9,6 +9,13 @@ import clone_vm
 
 
 class CloneTests(unittest.TestCase):
+    @patch.dict('os.environ', {'ESXI_KNOWN_HOSTS': '/mounted/known_hosts'})
+    def test_host_keys_loaded_from_mounted_file(self):
+        client = Mock()
+        clone_vm.load_ssh_host_keys(client)
+        client.load_system_host_keys.assert_called_once()
+        client.load_host_keys.assert_called_once_with('/mounted/known_hosts')
+
     def test_credentials_file_and_identity_override(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "credentials.json"
