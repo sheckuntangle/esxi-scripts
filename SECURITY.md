@@ -12,9 +12,13 @@ The workspace currently has no Git commits, so Git history could not be audited.
   Limit descriptors to 16 MiB and archives to 10,000 members. Archive members
   are read without extraction; traversal paths and duplicate regular files
   are rejected.
-- Use the same interface mapping validation in the GUI and CLI. Reject invalid
+- Use the same interface mapping validation in deployment, cloning, and the GUI. Reject invalid
   positions, duplicate positions, nonboolean connection flags, control characters,
   and invalid new network names. CLI validation happens before connecting to ESXi.
+  Clone mappings are checked against present VMX adapters before network creation
+  or source shutdown, and checked again after shutdown. Network names are
+  pipe-hex escaped when written to VMX, protecting configuration boundaries.
+  The source network configuration is never edited; the clone retains generated MACs.
 - Sanitize upload HTTP exceptions so temporary lease authorization URLs do not
   appear in script output. Download errors also omit signed URLs; job output
   redacts the job's saved ESXi password.
@@ -31,7 +35,9 @@ The workspace currently has no Git commits, so Git history could not be audited.
 
 - 84 unit/regression tests passed both locally with updated dependencies and
   inside the rebuilt Python 3.12 Docker image. The subsequent network-access
-  update passes 86 tests, including remote hostname/IP and optional host-allowlist checks.
+  update passed 86 tests, including remote hostname/IP and optional host-allowlist checks.
+  The clone-interface update passes 96 tests, including safe VMX serialization,
+  network preflight, unchanged source settings, and private mapping-file handling.
 - Browser checks passed for downloads, saved OVA deployment, interface mappings,
   cloning/network fixtures, progress output, reconnect, and desktop/mobile layouts.
   Tests simulate mutations; no VM was deployed, cloned, powered off, or deleted.

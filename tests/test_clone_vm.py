@@ -60,6 +60,55 @@ nvram = "Source.nvram"
             self.assertNotIn(key, result)
         self.assertEqual(settings["displayname"], "Source")
 
+    def test_interfaces_follow_actual_vmx_slots_and_keep_clone_connected_default(self):
+        settings = clone_vm.read_vmx('ethernet2.present = "TRUE"\nethernet0.present = "TRUE"\nethernet0.networkName = "lab|22one|22"\nethernet0.startConnected = "FALSE"\nethernet1.present = "FALSE"\n')
+        self.assertEqual(clone_vm.vmx_interfaces(settings), [dict(index=1,label='GE1',network='lab"one"',connected=True), dict(index=3,label='GE3',network='VM Network',connected=True)])
+
+    def test_clone_network_overrides_escape_vmx_and_preserve_source_and_new_mac(self):
+        source = dict({'scsi0:0.filename':'source.vmdk', 'ethernet0.present':'TRUE', 'ethernet0.address':'00:50:56:00:00:01', 'ethernet0.dvs.switchid':'old-switch', 'ethernet0.networkname':'old'})
+        prepared, _ = clone_vm.prepare_vmx(source, 'clone')
+        mappings = clone_vm.validate_nic_mappings([dict(index=1,label='GE1',network='lab "a" |22',connected=False)])
+        actual = clone_vm.apply_nic_mappings(prepared,mappings)
+        self.assertEqual(actual['ethernet0.networkname'], 'lab |22a|22 |7C22')
+        self.assertEqual(actual['ethernet0.startconnected'], 'FALSE')
+        self.assertEqual(actual['ethernet0.connected'], 'FALSE')
+        self.assertEqual(actual['ethernet0.addresstype'], 'generated')
+        self.assertNotIn('ethernet0.address', actual)
+        self.assertNotIn('ethernet0.dvs.switchid', actual)
+        self.assertEqual(source['ethernet0.networkname'], 'old')
+        self.assertEqual(prepared['ethernet0.networkname'], 'old')
+        with self.assertRaises(clone_vm.CloneError):
+            clone_vm.apply_nic_mappings(prepared,[dict(index=2,label='GE2',network='lab',connected=True)])
+
+    @patch('create_test_network.create_network')
+    @patch('create_test_network.query')
+    def test_clone_creates_shared_network_once_and_rejects_missing_or_conflicting_targets(self, query, create):
+        client = Mock(); query.return_value = []
+        mappings = clone_vm.validate_nic_mappings([dict(index=i,label=f'GE{i}',network='shared-lab',connected=True,create=True) for i in (1,2)])
+        clone_vm.prepare_clone_networks(client,mappings)
+        create.assert_called_once_with(client,'shared-lab')
+        create.reset_mock(); query.return_value = [dict(Name='shared-lab')]
+        with self.assertRaises(clone_vm.CloneError):
+            clone_vm.prepare_clone_networks(client,mappings)
+        create.assert_not_called()
+        query.return_value = []
+        with self.assertRaises(clone_vm.CloneError):
+            clone_vm.prepare_clone_networks(client,[dict(index=1,label='GE1',network='missing',connected=True,create=False)])
+        create.assert_not_called()
+
+    @patch('clone_vm.ensure_off')
+    @patch('clone_vm.prepare_clone_networks')
+    def test_stale_clone_mapping_rejected_before_network_creation_or_source_shutdown(self, networks, shutdown):
+        client = MagicMock(); sftp = client.open_sftp.return_value.__enter__.return_value
+        sftp.stat.side_effect = FileNotFoundError(2,'missing')
+        sftp.open.return_value.__enter__.return_value.read.return_value = b'scsi0:0.fileName = "source.vmdk"\nethernet0.present = "TRUE"\n'
+        args = clone_vm.parser().parse_args(['--vm-id','1','--clone-name','Clone'])
+        args.nic_mappings = [dict(index=2,label='GE2',network='lab',connected=True,create=False)]
+        with patch('clone_vm.inventory',return_value=[('1','Source','[ds] Source/Source.vmx')]):
+            with self.assertRaises(clone_vm.CloneError):
+                clone_vm.clone(client,args)
+        networks.assert_not_called(); shutdown.assert_not_called()
+
     def test_paths_and_quoting_data(self):
         self.assertEqual(clone_vm.datastore_path("[Data store] folder/VM.vmx"),
                          "/vmfs/volumes/Data store/folder/VM.vmx")
@@ -123,6 +172,27 @@ nvram = "Source.nvram"
         output = b"Clone: 10%\rClone: 100%\n"
         self.assertEqual(clone_vm.read_output(io.BytesIO(output), True), output.decode())
         self.assertEqual(progress.call_count, 2)
+
+    @patch('clone_vm.prepare_clone_networks')
+    @patch('clone_vm.ensure_off')
+    @patch('clone_vm.remote')
+    def test_clone_writes_selected_network_and_disconnected_state_to_destination_only(self, remote, shutdown, networks):
+        client=MagicMock(); sftp=client.open_sftp.return_value.__enter__.return_value
+        sftp.stat.side_effect=FileNotFoundError(2,'missing')
+        sftp.open.return_value.__enter__.return_value.read.return_value=b'scsi0:0.fileName = "source.vmdk"\nethernet0.present = "TRUE"\nethernet0.networkName = "source-lab"\nethernet0.address = "00:50:56:00:00:01"\n'
+        remote.side_effect=lambda client,*args,**kw: 'Powered off\n' if args[1]=='vmsvc/power.getstate' else ('99\n' if args[1]=='solo/registervm' else '')
+        args=clone_vm.parser().parse_args(['--vm-id','1','--clone-name','Clone'])
+        args.nic_mappings=clone_vm.validate_nic_mappings([dict(index=1,label='GE1',network='clone-lab',connected=False,create=True)])
+        with patch('clone_vm.inventory',return_value=[('1','Source','[ds] Source/Source.vmx')]):
+            clone_vm.clone(client,args)
+        text=sftp.open.return_value.__enter__.return_value.write.call_args.args[0].decode()
+        self.assertIn('ethernet0.networkname = "clone-lab"',text)
+        self.assertIn('ethernet0.startconnected = "FALSE"',text)
+        self.assertIn('ethernet0.connected = "FALSE"',text)
+        self.assertNotIn('00:50:56:00:00:01',text)
+        writes=[call.args for call in sftp.open.call_args_list if call.args[1]=='wb']
+        self.assertEqual(writes,[('/vmfs/volumes/ds/Clone/Clone.vmx','wb')])
+        networks.assert_called_once_with(client,args.nic_mappings)
 
     @patch("clone_vm.ensure_off")
     @patch("clone_vm.remote")

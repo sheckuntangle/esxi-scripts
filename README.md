@@ -73,7 +73,17 @@ output window. The **Misc ESXi Actions** tab adds:
   VM IDs distinguish machines with duplicate names. SSH access to ESXi is required.
   The existing cloning script automatically
   shuts down the source (graceful first, forced if needed), copies disks, and
-  leaves source and clone off. Clone adapters connect at startup.
+  leaves source and clone off. **Interface networks** loads the source VM's
+  adapters and available ESXi port groups. Each row has a network dropdown and
+  **Connected** checkbox, matching the deployment form. Source port groups are
+  selected initially and clone adapters connect by default; uncheck adapters to
+  leave them disconnected. GE1–GE6 correspond to virtual NIC slots 1–6 (higher
+  slots use NIC labels). The source VM's network settings are never edited.
+  **Create new…** creates an isolated vSwitch and same-named port group during
+  cloning, with all security options enabled and port group policies inherited.
+  Multiple clone adapters can share a new network name; it is created once.
+  Created networks remain if cloning fails. Select the existing network on retry.
+  New MAC addresses are generated as before.
 - **Create an internal network**: enter a name for both vSwitch and port group.
   The switch has no uplinks and enables all three security options. Port group
   policies inherit.
@@ -204,6 +214,22 @@ With the credentials file configured:
 ```bash
 python3 clone_vm.py --vm "Source VM" --clone-name "Source VM Clone"
 ```
+
+To set clone interface networks from the CLI, add
+`--nic-config /path/to/interface-mappings.json`. For example:
+
+```json
+[
+  {"index": 1, "label": "GE1", "network": "clone-lab", "connected": true, "create": true},
+  {"index": 6, "label": "GE6", "network": "VM Network", "connected": false, "create": false}
+]
+```
+
+Positions use the actual VMX adapter slot plus one (`ethernet0` is GE1).
+Only present adapters may be mapped; all unmapped adapters retain the previous
+clone behavior. Existing port groups and new-name collisions are checked before
+source shutdown. Clone network creation requires standard ESXi port groups;
+distributed port groups are not offered in the GUI.
 
 Or specify connection options explicitly:
 

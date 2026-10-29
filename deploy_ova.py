@@ -24,7 +24,7 @@ import requests
 from pyVim.connect import Disconnect, SmartConnect
 from pyVmomi import vim
 
-from clone_vm import CloneError, load_credentials, progress
+from clone_vm import CloneError, load_credentials, progress, validate_nic_mappings
 
 
 OVF = "http://schemas.dmtf.org/ovf/envelope/1"
@@ -122,28 +122,6 @@ def interface_labels(root):
         labels.append(next(iter(matches)) if len(matches) == 1 else
                       item.findtext("rasd:ElementName", default=f"NIC {len(labels)+1}", namespaces=NS))
     return labels
-
-
-def validate_nic_mappings(value):
-    if not isinstance(value, list) or len(value) > 128:
-        raise CloneError("Invalid interface mappings.")
-    result, seen = [], set()
-    for item in value:
-        if not isinstance(item, dict):
-            raise CloneError("Invalid interface mapping.")
-        index = item.get("index")
-        label, network = item.get("label"), item.get("network")
-        if type(index) is not int or not 1 <= index <= 128 or index in seen:
-            raise CloneError("Invalid or duplicate interface position.")
-        if not all(isinstance(v, str) and 0 < len(v) <= 256 and not any(ord(c) < 32 for c in v) for v in (label, network)):
-            raise CloneError("Invalid interface label or network name.")
-        if type(item.get("connected")) is not bool or type(item.get("create", False)) is not bool:
-            raise CloneError("Interface connection settings must be booleans.")
-        if item.get("create") and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_. -]{0,30}", network):
-            raise CloneError("New network names must be 1–31 letters, digits, spaces, '.', '_' or '-'.")
-        seen.add(index)
-        result.append(dict(index=index, label=label, network=network, connected=item["connected"], create=item.get("create", False)))
-    return result
 
 
 def create_nic_networks(args, password, overrides):

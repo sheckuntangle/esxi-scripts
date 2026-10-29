@@ -1,3 +1,58 @@
+let cloneInterfaceBinding = null;
+let cloneInterfaceRequest = 0;
+
+function renderInterfaceRows(container, interfaces, networks) {
+  for (const nic of interfaces) {
+    const row = document.createElement('div'); row.className = 'interface-row'; row.dataset.index = nic.index;
+    const title = document.createElement('strong'); title.textContent = nic.label;
+    const networkLabel = document.createElement('label');
+    const select = document.createElement('select'); select.className = 'nic-network'; select.setAttribute('aria-label', `${nic.label} ESXi network`);
+    for (const name of networks) select.add(new Option(name, name));
+    const selectedNetwork = nic.network || 'VM Network';
+    if (!networks.includes(selectedNetwork)) select.add(new Option(selectedNetwork + ' (unavailable)', selectedNetwork));
+    select.add(new Option('Create new…', '__create__')); select.value = selectedNetwork; networkLabel.append(select);
+    const name = document.createElement('input'); name.className = 'nic-new-name'; name.placeholder = 'New switch and port group name'; name.maxLength = 31; name.hidden = true; name.disabled = true; name.setAttribute('aria-label', `${nic.label} new network name`);
+    select.addEventListener('change', () => { name.hidden = select.value !== '__create__'; name.disabled = name.hidden; name.required = !name.hidden; });
+    const connected = document.createElement('label'); connected.className = 'check';
+    const check = document.createElement('input'); check.type = 'checkbox'; check.className = 'nic-connected'; check.checked = nic.connected ?? nic.ge6; check.setAttribute('aria-label', `${nic.label} connected`);
+    connected.append(check, document.createTextNode('Connected'));
+    row.append(title, networkLabel, connected, name); $(container).append(row);
+  }
+}
+
+function clearCloneInterfaces() {
+  cloneInterfaceRequest++;
+  cloneInterfaceBinding = null;
+  $('clone-interface-rows').replaceChildren();
+  $('clone-interface-message').textContent = 'Select a source VM to load its interfaces.';
+}
+
+async function refreshCloneInterfaces() {
+  clearCloneInterfaces();
+  const sequence = cloneInterfaceRequest;
+  const vmid = $('clone-source').value;
+  if (!vmid || !vmConnection) return;
+  $('clone-interface-message').textContent = 'Loading source VM interfaces and ESXi networks…';
+  try {
+    const [source, host] = await Promise.all([api('/api/vms/' + encodeURIComponent(vmid) + '/interfaces'), api('/api/networks')]);
+    if (sequence !== cloneInterfaceRequest) return;
+    if (source.vmid !== vmid || source.host !== host.host || source.user !== host.user || host.host !== $('host').value.trim() || host.user !== $('user').value.trim()) throw new Error('Save the connection, then reload the source VM and interfaces.');
+    cloneInterfaceBinding = { vmid, host: host.host, user: host.user, interfaces: source.interfaces };
+    renderInterfaceRows('clone-interface-rows', source.interfaces, host.networks);
+    $('clone-interface-message').textContent = `${source.interfaces.length} interfaces loaded. Source networks are selected; clone adapters connect by default.`;
+  } catch (error) {
+    if (sequence === cloneInterfaceRequest) $('clone-interface-message').textContent = error.message;
+  }
+}
+
+function readInterfaceMappings(container, interfaces) {
+  return interfaces.map((nic) => {
+    const row = $(container).querySelector(`.interface-row[data-index="${nic.index}"]`);
+    const create = row.querySelector('.nic-network').value === '__create__';
+    return { index: nic.index, label: nic.label, network: create ? row.querySelector('.nic-new-name').value.trim() : row.querySelector('.nic-network').value, connected: row.querySelector('.nic-connected').checked, create };
+  });
+}
+
 let interfaceBinding = null;
 let interfaceRequest = 0;
 let setupDownload = false;
@@ -24,21 +79,7 @@ async function refreshInterfaces() {
     if (sequence !== interfaceRequest) return;
     if (host.host !== $('host').value.trim() || host.user !== $('user').value.trim()) throw new Error('Save the ESXi connection, then refresh networks.');
     interfaceBinding = { filename, host: host.host, user: host.user, interfaces: ova.interfaces };
-    for (const nic of ova.interfaces) {
-      const row = document.createElement('div'); row.className = 'interface-row'; row.dataset.index = nic.index;
-      const title = document.createElement('strong'); title.textContent = nic.label;
-      const networkLabel = document.createElement('label');
-      const select = document.createElement('select'); select.className = 'nic-network'; select.setAttribute('aria-label', `${nic.label} ESXi network`);
-      for (const name of host.networks) select.add(new Option(name, name));
-      if (!host.networks.includes('VM Network')) select.add(new Option('VM Network (unavailable)', 'VM Network'));
-      select.add(new Option('Create new…', '__create__')); select.value = 'VM Network'; networkLabel.append(select);
-      const name = document.createElement('input'); name.className = 'nic-new-name'; name.placeholder = 'New switch and port group name'; name.maxLength = 31; name.hidden = true; name.disabled = true; name.setAttribute('aria-label', `${nic.label} new network name`);
-      select.addEventListener('change', () => { name.hidden = select.value !== '__create__'; name.disabled = name.hidden; name.required = !name.hidden; });
-      const connected = document.createElement('label'); connected.className = 'check';
-      const check = document.createElement('input'); check.type = 'checkbox'; check.className = 'nic-connected'; check.checked = nic.ge6; check.setAttribute('aria-label', `${nic.label} connected`);
-      connected.append(check, document.createTextNode('Connected'));
-      row.append(title, networkLabel, connected, name); $('interface-rows').append(row);
-    }
+    renderInterfaceRows('interface-rows', ova.interfaces, host.networks);
     applyGe6Override();
     $('interface-message').textContent = `${ova.interfaces.length} interfaces loaded. Only GE6 is connected by default.`;
   } catch (error) { if (sequence === interfaceRequest) $('interface-message').textContent = error.message; }
@@ -48,7 +89,7 @@ function applyGe6Override() {
   if (!interfaceBinding) return;
   const override = Number($('ge6-nic').value);
   for (const nic of interfaceBinding.interfaces) {
-    const check = document.querySelector(`.interface-row[data-index="${nic.index}"] .nic-connected`);
+    const check = $('interface-rows').querySelector(`.interface-row[data-index="${nic.index}"] .nic-connected`);
     check.checked = override ? nic.index === override : nic.ge6;
   }
 }
@@ -56,11 +97,7 @@ function applyGe6Override() {
 function interfaceMappings() {
   if (!interfaceBinding) return [];
   if (interfaceBinding.filename !== $('saved-file').value || interfaceBinding.host !== $('host').value.trim() || interfaceBinding.user !== $('user').value.trim()) throw new Error('Reload interfaces and networks for the selected OVA and ESXi connection.');
-  return interfaceBinding.interfaces.map((nic) => {
-    const row = document.querySelector(`.interface-row[data-index="${nic.index}"]`);
-    const create = row.querySelector('.nic-network').value === '__create__';
-    return { index: nic.index, label: nic.label, network: create ? row.querySelector('.nic-new-name').value.trim() : row.querySelector('.nic-network').value, connected: row.querySelector('.nic-connected').checked, create };
-  });
+  return readInterfaceMappings('interface-rows', interfaceBinding.interfaces);
 }
 
 const $ = (id) => document.getElementById(id);
@@ -73,6 +110,7 @@ let vmLoading = false;
 let vmRequest = 0;
 
 function invalidateVms() {
+  clearCloneInterfaces();
   vmRequest += 1;
   vmLoading = false;
   vmConnection = null;
@@ -83,6 +121,7 @@ function invalidateVms() {
 
 async function refreshVms() {
   if (vmLoading) return;
+  clearCloneInterfaces();
   const sequence = ++vmRequest;
   const previous = vmConnection;
   const selected = $('clone-source').value;
@@ -103,6 +142,7 @@ async function refreshVms() {
     vmConnection = { host: data.host, user: data.user, vms: data.vms };
     if (previous && previous.host === data.host && previous.user === data.user && data.vms.some((vm) => vm.id === selected)) $('clone-source').value = selected;
     $('vm-list-message').textContent = `${data.vms.length} ${data.vms.length === 1 ? 'VM' : 'VMs'} on ${data.host}.`;
+    if ($('clone-source').value) refreshCloneInterfaces();
   } catch (error) {
     if (sequence !== vmRequest) return;
     $('clone-source').replaceChildren(new Option('Unable to load VMs · click Refresh to retry', ''));
@@ -369,7 +409,9 @@ $('clone-form').addEventListener('submit', (event) => {
   event.preventDefault();
   const selected = vmConnection && vmConnection.vms.find((vm) => vm.id === $('clone-source').value);
   if (!selected) { $('clone-message').textContent = 'Refresh the VM list and select a source VM.'; return; }
-  runMisc('clone', { source_vm: selected.name, source_vm_id: selected.id, source_host: vmConnection.host, source_user: vmConnection.user, name: $('clone-name').value, datastore: $('clone-datastore').value });
+  if (!cloneInterfaceBinding || cloneInterfaceBinding.vmid !== selected.id || cloneInterfaceBinding.host !== vmConnection.host || cloneInterfaceBinding.user !== vmConnection.user) { $('clone-message').textContent = 'Load the source VM interfaces before cloning.'; return; }
+  const nicMappings = readInterfaceMappings('clone-interface-rows', cloneInterfaceBinding.interfaces);
+  runMisc('clone', { nic_mappings: nicMappings, source_vm: selected.name, source_vm_id: selected.id, source_host: vmConnection.host, source_user: vmConnection.user, name: $('clone-name').value, datastore: $('clone-datastore').value });
 });
 $('network-form').addEventListener('submit', (event) => {
   event.preventDefault();
@@ -419,3 +461,6 @@ $('download-form').addEventListener('submit', async (event) => {
     setupDownload = true; follow(data.job, true);
   } catch (error) { $('download-message').textContent = error.message; setBusy(false); }
 });
+
+$('clone-source').addEventListener('change', refreshCloneInterfaces);
+$('refresh-clone-interfaces').addEventListener('click', refreshCloneInterfaces);

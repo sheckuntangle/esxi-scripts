@@ -20,8 +20,8 @@ from flask import Flask, Response, jsonify, render_template, request, stream_wit
 import requests
 import paramiko
 
-from clone_vm import CloneError, inventory, load_ssh_host_keys
-from deploy_ova import ova_descriptor, interface_labels, objects, SmartConnect, Disconnect, vim, validate_nic_mappings
+from clone_vm import CloneError, inventory, load_ssh_host_keys, config_field, datastore_path, read_vmx, remote, vmx_interfaces, validate_nic_mappings
+from deploy_ova import ova_descriptor, interface_labels, objects, SmartConnect, Disconnect, vim
 
 
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_. -]{0,79}\Z")
@@ -96,6 +96,28 @@ def fetch_vms(credentials):
         raise InputError("Cannot load ESXi VMs. Check SSH connectivity and the host's trusted SSH key.") from None
     except Exception:
         raise InputError("Could not read the VM inventory from ESXi. Check account permissions.") from None
+    finally:
+        client.close()
+
+
+def fetch_clone_interfaces(credentials, vmid):
+    if not all(credentials.get(key) for key in ("host", "user", "password")):
+        raise InputError("Save the ESXi connection first.")
+    client = paramiko.SSHClient()
+    try:
+        load_ssh_host_keys(client)
+        client.connect(credentials["host"], port=credentials.get("port", 22), username=credentials["user"],
+                       password=credentials["password"], look_for_keys=False, allow_agent=False,
+                       timeout=20, banner_timeout=20, auth_timeout=20)
+        config = remote(client, "vim-cmd", "vmsvc/get.config", vmid)
+        path = datastore_path(config_field(config, "vmPathName"))
+        with client.open_sftp() as sftp, sftp.open(path, "rb") as stream:
+            raw = stream.read(1024 * 1024 + 1)
+            if len(raw) > 1024 * 1024:
+                raise InputError("Source VM configuration is too large.")
+            return vmx_interfaces(read_vmx(raw.decode("utf-8-sig")))
+    except Exception:
+        raise InputError("Cannot read source VM interfaces. Check SSH connectivity, trusted host keys, and account permissions.") from None
     finally:
         client.close()
 
@@ -189,7 +211,8 @@ def action_input(data):
         if len(datastore) > 256 or any(ord(c) < 32 for c in datastore):
             raise InputError("Enter a valid datastore name, or leave it blank to use the source datastore.")
         return dict(kind=kind, name=name, source_vm=source, source_vm_id=source_id, datastore=datastore,
-                    source_host=str(data.get("source_host", "")), source_user=str(data.get("source_user", "")))
+                    source_host=str(data.get("source_host", "")), source_user=str(data.get("source_user", "")),
+                    nic_mappings=nic_input(data.get("nic_mappings", [])))
     if kind == "network":
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_. -]{0,30}", name):
             raise InputError("Network name must be 1–31 letters, digits, spaces, '.', '_' or '-', starting with a letter or digit.")
@@ -282,6 +305,8 @@ class Jobs:
             credentials = read_credentials(self.root)
             if not options.get("download_only") and not all(credentials.get(key) for key in ("host", "user", "password")):
                 raise InputError("Save the ESXi connection before starting an action.")
+            if options["kind"] == "clone" and options["nic_mappings"] and not options["source_vm_id"]:
+                raise InputError("Select a source VM by ID before changing its interfaces.")
             if options["kind"] == "clone" and options["source_vm_id"]:
                 if options["source_host"] != credentials["host"] or options["source_user"] != credentials["user"]:
                     raise InputError("The ESXi connection changed. Refresh the source VM list and select a VM again.")
@@ -412,6 +437,10 @@ class Jobs:
                         "--clone-name", job.name, "--creds-file", str(credentials)])
                     if job.options["datastore"]:
                         command.extend(["--datastore", job.options["datastore"]])
+                    if job.options.get("nic_mappings"):
+                        mapping_file = Path(temporary) / "interfaces.json"
+                        mapping_file.write_text(json.dumps(job.options["nic_mappings"]))
+                        command.extend(["--nic-config", str(mapping_file)])
                 else:
                     command.extend([str(self.root / "create_test_network.py"), job.name])
                 environment = dict(os.environ, ESXI_CREDS_FILE=str(credentials))
@@ -497,6 +526,15 @@ def create_app(root=None):
         with jobs.lock:
             credentials = read_credentials(root)
         return jsonify(host=credentials.get("host", ""), user=credentials.get("user", ""), vms=fetch_vms(credentials))
+
+    @app.get("/api/vms/<vmid>/interfaces")
+    def clone_interfaces(vmid):
+        if not re.fullmatch(r"[1-9][0-9]{0,9}", vmid):
+            raise InputError("Select a valid source VM ID.")
+        with jobs.lock:
+            credentials = read_credentials(root)
+        return jsonify(host=credentials.get("host", ""), user=credentials.get("user", ""), vmid=vmid,
+                       interfaces=fetch_clone_interfaces(credentials, vmid))
 
     @app.get("/api/networks")
     def networks():

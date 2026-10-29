@@ -315,6 +315,46 @@ class WebTests(unittest.TestCase):
         self.assertFalse(deployment_input(options(reuse_existing=False))['reuse_existing'])
         self.assertIn('id="reuse-existing" type="checkbox" checked', self.client.get('/').get_data(as_text=True))
 
+    @patch('web.app.fetch_clone_interfaces')
+    def test_clone_interface_endpoint_validates_id_and_uses_saved_connection(self, fetch):
+        self.credentials(); fetch.return_value = [dict(index=1,label='GE1',network='lab',connected=True)]
+        response = self.client.get('/api/vms/34/interfaces')
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.json['vmid'],'34')
+        self.assertEqual(response.json['interfaces'],fetch.return_value)
+        self.assertEqual(fetch.call_args.args[0]['host'],'esxi.test')
+        self.assertNotIn('test-password-value',response.get_data(as_text=True))
+        self.assertEqual(self.client.get('/api/vms/abc/interfaces').status_code,400)
+        self.assertEqual(fetch.call_count,1)
+
+    @patch('web.app.threading.Thread')
+    def test_clone_mappings_require_bound_source_id_and_valid_schema(self, thread):
+        self.credentials()
+        base=dict(kind='clone',source_vm='source',name='new',source_host='esxi.test',source_user='test-user', nic_mappings=[dict(index=1,label='GE1',network='lab',connected=False,create=True)])
+        self.assertEqual(self.client.post('/api/jobs',json=base).status_code,400)
+        self.assertEqual(self.client.post('/api/jobs',json=dict(base,source_vm_id='34',source_host='other')).status_code,400)
+        self.assertEqual(self.client.post('/api/jobs',json=dict(base,source_vm_id='34',nic_mappings=[dict(index=1,label='GE1',network='bad"\n',connected=True,create=True)])).status_code,400)
+        thread.assert_not_called()
+        self.assertEqual(self.client.post('/api/jobs',json=dict(base,source_vm_id='34')).status_code,202)
+
+    @patch('web.app.subprocess.Popen')
+    def test_clone_worker_passes_mappings_in_private_temporary_directory(self, popen):
+        from web.app import action_input
+        mappings=[dict(index=1,label='GE1',network='lab',connected=False,create=True)]
+        job=Job(action_input(dict(kind='clone',source_vm_id='34',name='clone-01',nic_mappings=mappings)),dict(password='fixture-secret'))
+        process=popen.return_value.__enter__.return_value
+        process.stdout=io.StringIO('Configured network\n');process.wait.return_value=0
+        def inspect(command,**kwargs):
+            path=Path(command[command.index('--nic-config')+1])
+            self.assertEqual(json.loads(path.read_text()),mappings)
+            self.assertEqual(path.parent.stat().st_mode & 0o777,0o700)
+            return popen.return_value
+        popen.side_effect=inspect
+        Jobs(self.root).run(job)
+        self.assertEqual(job.status,'success')
+        command=popen.call_args.args[0]
+        self.assertFalse(Path(command[command.index('--nic-config')+1]).exists())
+
     def test_download_conflicts_and_symlinks_are_refused(self):
         self.credentials()
         directory = self.root/'OVA-download'

@@ -109,6 +109,91 @@ def read_vmx(text):
     return settings
 
 
+def validate_nic_mappings(value):
+    if not isinstance(value, list) or len(value) > 128:
+        raise CloneError("Invalid interface mappings.")
+    result, seen = [], set()
+    for item in value:
+        if not isinstance(item, dict):
+            raise CloneError("Invalid interface mapping.")
+        index = item.get("index")
+        label, network = item.get("label"), item.get("network")
+        if type(index) is not int or not 1 <= index <= 128 or index in seen:
+            raise CloneError("Invalid or duplicate interface position.")
+        if not all(isinstance(v, str) and 0 < len(v) <= 256 and not any(ord(c) < 32 for c in v) for v in (label, network)):
+            raise CloneError("Invalid interface label or network name.")
+        if type(item.get("connected")) is not bool or type(item.get("create", False)) is not bool:
+            raise CloneError("Interface connection settings must be booleans.")
+        if item.get("create") and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_. -]{0,30}", network):
+            raise CloneError("New network names must be 1–31 letters, digits, spaces, '.', '_' or '-'.")
+        seen.add(index)
+        result.append(dict(index=index, label=label, network=network, connected=item["connected"], create=item.get("create", False)))
+    return result
+
+
+
+def load_nic_config(path):
+    if path is None:
+        return []
+    with Path(path).open("rb") as stream:
+        raw = stream.read(64 * 1024 + 1)
+    if len(raw) > 64 * 1024:
+        raise CloneError("Interface configuration is too large")
+    return validate_nic_mappings(json.loads(raw))
+
+
+def vmx_interfaces(settings):
+    result = []
+    for key, value in settings.items():
+        match = re.fullmatch(r"ethernet(\d+)\.present", key)
+        if not match or value.lower() != "true":
+            continue
+        index = int(match.group(1)) + 1
+        prefix = f"ethernet{index-1}"
+        network = re.sub(r"\|([0-9a-fA-F]{2})", lambda m: chr(int(m[1], 16)), settings.get(prefix + ".networkname", "VM Network"))
+        result.append(dict(index=index, label=f"GE{index}" if index <= 6 else f"NIC {index}",
+                           network=network, connected=True))
+    return sorted(result, key=lambda nic: nic["index"])
+
+
+def apply_nic_mappings(settings, mappings):
+    adapters = {nic["index"]: nic for nic in vmx_interfaces(settings)}
+    result = dict(settings)
+    for item in mappings:
+        if item["index"] not in adapters or item["label"] != adapters[item["index"]]["label"]:
+            raise CloneError("Source VM interfaces changed. Reload the interface list before cloning.")
+        prefix = f"ethernet{item['index']-1}"
+        for key in list(result):
+            if key.startswith((prefix + ".dvs.", prefix + ".opaquenetwork.")) or key in (prefix + ".vnet", prefix + ".networkid"):
+                result.pop(key)
+        # VMX uses pipe-hex escapes, not shell or JSON quoting.
+        result[prefix + ".networkname"] = item["network"].replace("|", "|7C").replace('"', "|22")
+        result.pop(prefix + ".connectiontype", None)
+        result[prefix + ".startconnected"] = "TRUE" if item["connected"] else "FALSE"
+        result[prefix + ".connected"] = result[prefix + ".startconnected"]
+    return result
+
+
+def prepare_clone_networks(client, mappings):
+    if not mappings:
+        return
+    from create_test_network import query, create_network
+    try:
+        groups = {row.get("Name") for row in query(client, "portgroup", "list")}
+        switches = {row.get("Name") for row in query(client, "list")}
+        new_names = {item["network"] for item in mappings if item["create"]}
+        if new_names & (groups | switches):
+            raise CloneError("A requested new network already exists. Select the existing network instead.")
+        missing = {item["network"] for item in mappings} - groups - new_names
+        if missing:
+            raise CloneError("A selected ESXi port group no longer exists. Reload the network list.")
+        for name in sorted(new_names):
+            progress(f"Creating clone network {name!r}; created networks are retained if cloning fails")
+            create_network(client, name)
+    except Exception as exc:
+        raise CloneError(str(exc)) from None
+
+
 def prepare_vmx(settings, clone_name):
     settings = dict(settings)
     if any(k.startswith(("encryption.", "vtpm.")) for k in settings) or settings.get("managedvm.autoaddvtpm", "false").lower() == "true":
@@ -205,6 +290,9 @@ def ensure_off(client, vmid, timeout):
 
 
 def clone(client, args):
+    mappings = getattr(args, "nic_mappings", None)
+    if mappings is None:
+        mappings = load_nic_config(getattr(args, "nic_config", None))
     progress("Reading ESXi VM inventory")
     vms = inventory(client)
     matches = [vm for vm in vms if (vm[0] == args.vm_id if args.vm_id else vm[1] == args.vm)]
@@ -227,12 +315,18 @@ def clone(client, args):
         else:
             raise CloneError(f"Destination already exists: {destination}")
         with sftp.open(source, "rb") as stream:
-            prepare_vmx(read_vmx(stream.read().decode("utf-8-sig")), args.clone_name)
+            preview, _ = prepare_vmx(read_vmx(stream.read().decode("utf-8-sig")), args.clone_name)
+            apply_nic_mappings(preview, mappings)
+        prepare_clone_networks(client, mappings)
         ensure_off(client, vmid, args.shutdown_timeout)
         progress("Reading powered-off source configuration")
         with sftp.open(source, "rb") as stream:
             original_settings = read_vmx(stream.read().decode("utf-8-sig"))
         settings, disks = prepare_vmx(original_settings, args.clone_name)
+        settings = apply_nic_mappings(settings, mappings)
+        for nic in vmx_interfaces(settings):
+            prefix = f"ethernet{nic['index']-1}"
+            progress(f"{nic['label']}: {nic['network']}, {'connected at power on' if settings.get(prefix + '.startconnected', 'TRUE').lower() == 'true' else 'disconnected'}")
         progress(f"Creating {destination}")
         # mkdir without -p refuses an existing directory, protecting existing files.
         remote(client, "mkdir", destination)
@@ -251,7 +345,7 @@ def clone(client, args):
                 remote(client, "cp", resolve_disk(posixpath.dirname(source), nvram), posixpath.join(destination, "clone.nvram"))
                 settings["nvram"] = "clone.nvram"
             vmx = posixpath.join(destination, args.clone_name + ".vmx")
-            progress("Writing clone configuration with new identity and connected network adapters")
+            progress("Writing clone configuration with new identity and selected interface settings")
             with sftp.open(vmx, "wb") as stream:
                 stream.write("".join(f'{key} = "{value}"\n' for key, value in settings.items()).encode("utf-8"))
             assert_off(client, vmid)
@@ -261,7 +355,7 @@ def clone(client, args):
                 raise CloneError(f"Unexpected registration response: {result}")
             registered = True
             assert_off(client, result.strip())
-            progress(f"Clone registered: VM ID {result.strip()}. Powered off; network adapters set to connect at power on. Source remains powered off.")
+            progress(f"Clone registered: VM ID {result.strip()}. Powered off; selected interface settings applied. Source remains powered off.")
         except (Exception, KeyboardInterrupt):
             print(f"Clone {'registered' if registered else 'incomplete'}; files retained at {destination}. Inspect before removing or retrying.", file=sys.stderr)
             raise
@@ -279,6 +373,7 @@ def parser():
     source.add_argument("--vm", help="Exact source VM display name")
     source.add_argument("--vm-id", help="Source VM inventory ID")
     result.add_argument("--clone-name", required=True, help="New VM name and directory name")
+    result.add_argument("--nic-config", type=Path, help="JSON interface mappings (index, label, network, connected, create)")
     result.add_argument("--datastore", help="Destination datastore; defaults to the source VM's datastore")
     result.add_argument("--disk-format", choices=("thin", "zeroedthick", "eagerzeroedthick"), default="thin")
     result.add_argument("--shutdown-timeout", type=int, default=120, help="Seconds to wait for graceful shutdown before forcing power off (default: 120)")
@@ -321,6 +416,7 @@ def main():
     client = paramiko.SSHClient()
     load_ssh_host_keys(client, args.known_hosts)
     try:
+        args.nic_mappings = load_nic_config(args.nic_config)
         progress("Loading connection credentials")
         password = load_credentials(args)
         if args.key:

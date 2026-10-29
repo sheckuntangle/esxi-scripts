@@ -95,7 +95,12 @@
                 <label for="clone-source">Source VM <span class="required">*</span></label><div class="vm-picker"><select id="clone-source" required aria-describedby="vm-list-message"><option value="">Load VMs from the saved ESXi connection</option></select><button id="refresh-vms" class="button secondary" type="button">Refresh</button></div><p id="vm-list-message" class="field-help" role="status">The VM list loads from your configured ESXi server.</p>
                 <label>New clone name <span class="required">*</span><input id="clone-name" required maxlength="80" placeholder="ubuntu-02" autocomplete="off"></label>
                 <label>Destination datastore <span class="optional">optional</span><input id="clone-datastore" placeholder="Use the source VM's datastore" autocomplete="off"></label>
-                <div class="deployment-policy action-policy"><span class="small-symbol">◇</span><div><strong>Source VM shutdown is automatic</strong><p>Graceful shutdown first; forced power-off if needed.<br>Source and clone stay off. Clone adapters connect at startup.</p></div></div>
+                <details class="advanced" id="clone-interface-options" open><summary>Interface networks <span>+</span></summary><div class="advanced-body">
+                  <button id="refresh-clone-interfaces" class="button secondary" type="button">Load / refresh interfaces and networks</button>
+                  <p id="clone-interface-message" class="message" role="status">Select a source VM to load its interfaces.</p><div id="clone-interface-rows"></div>
+                  <p class="field-help">Choose port groups and connection settings for the clone. “Create new” creates an isolated vSwitch and matching port group, with security enabled and inherited port group policies.</p>
+                </div></details>
+                <div class="deployment-policy action-policy"><span class="small-symbol">◇</span><div><strong>Source VM shutdown is automatic</strong><p>Graceful shutdown first; forced power-off if needed.<br>Source and clone stay off. Clone adapters use the selected connection settings.</p></div></div>
                 <p id="clone-message" class="message error" role="alert"></p>
                 <button id="clone-button" class="button primary" type="submit"><span>Clone VM</span><span>↗</span></button>
               </fieldset></form>
