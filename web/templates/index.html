@@ -46,6 +46,8 @@
             <label>Save file as <span class="optional">optional</span><input id="filename" name="filename" placeholder="Use the name from the link" autocomplete="off"><span class="field-help">Saved in OVA-download/</span></label>
             <button id="download-button" class="button primary" type="submit">Download OVA</button>
           </div>
+          <label class="check"><input id="skip-download-tls" type="checkbox" checked><span>Skip download certificate verification</span></label>
+          <p class="field-help">Enabled by default for lab downloads. Uncheck to verify the download server’s certificate.</p>
           <label class="check"><input id="reuse-existing" type="checkbox"><span>Reuse this file if already downloaded</span></label>
           <p id="download-message" class="message error" role="alert"></p>
         </fieldset></form>

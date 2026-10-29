@@ -83,7 +83,10 @@ an exploitable defect or silently suppressing them.
 - OVA downloads can reach internal HTTP/HTTPS servers and follow redirects.
   This is intentional for internal Jenkins links. A trusted local user controls
   the URL; the downloader is not suitable as an unauthenticated network service.
-  HTTPS downloads verify certificates using the configured CA bundle. HTTP
+  At the user’s request, **Skip download certificate verification** is checked
+  by default. This skips HTTPS certificate and hostname verification, including
+  HTTPS redirects, so an active network attacker could supply a malicious OVA.
+  Uncheck it to verify HTTPS certificates using the configured CA bundle. HTTP
   provides no server authentication or transfer integrity. Use trusted sources;
   OVA publisher signatures/manifests are not cryptographically verified.
 - Credentials are stored as plaintext JSON protected by filesystem permissions,

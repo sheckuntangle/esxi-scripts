@@ -415,7 +415,7 @@ $('download-form').addEventListener('submit', async (event) => {
   if (busy) return;
   setBusy(true); $('download-message').textContent = '';
   try {
-    const data = await api('/api/jobs', { method: 'POST', body: JSON.stringify({ source: 'url', url: $('ova-url').value, filename: $('filename').value, name: 'OVA download', download_only: true, reuse_existing: $('reuse-existing').checked }) });
+    const data = await api('/api/jobs', { method: 'POST', body: JSON.stringify({ source: 'url', url: $('ova-url').value, filename: $('filename').value, name: 'OVA download', download_only: true, skip_download_tls_verification: $('skip-download-tls').checked, reuse_existing: $('reuse-existing').checked }) });
     setupDownload = true; follow(data.job, true);
   } catch (error) { $('download-message').textContent = error.message; setBusy(false); }
 });

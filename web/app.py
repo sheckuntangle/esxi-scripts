@@ -161,13 +161,14 @@ def deployment_input(data):
             raise InputError("GE6 NIC position must be between 1 and 128.")
     else:
         ge6 = None
-    for flag in ("reuse_existing", "download_only"):
+    for flag in ("reuse_existing", "download_only", "skip_download_tls_verification"):
         if flag in data and not isinstance(data[flag], bool):
             raise InputError(f"{flag} must be true or false.")
     return dict(source=source, url=url if source == "url" else "", filename=filename, name=name, datastore=datastore, iso_folder=iso_folder,
                 ge6_nic=ge6, nic_mappings=nic_input(data.get("nic_mappings", [])),
                 network_host=str(data.get("network_host", "")), network_user=str(data.get("network_user", "")),
-                download_only=data.get("download_only") is True, insecure=True, reuse_existing=source == "downloaded" or data.get("reuse_existing", False))
+                download_only=data.get("download_only") is True,
+                skip_download_tls_verification=data.get("skip_download_tls_verification", True), insecure=True, reuse_existing=source == "downloaded" or data.get("reuse_existing", False))
 
 
 def action_input(data):
@@ -312,8 +313,11 @@ class Jobs:
             raise InputError("The selected OVA no longer exists.")
         temporary = directory / (job.filename + "." + job.id + ".part")
         job.emit(f"Downloading OVA to OVA-download/{job.filename}", percent=0)
+        skip_tls = job.options.get("skip_download_tls_verification", True)
+        job.emit("Download certificate verification: " + ("disabled" if skip_tls else "enabled"))
         try:
             with requests.get(job.options["url"], stream=True, timeout=(20, 120),
+                              verify=not skip_tls,
                               headers={"Accept-Encoding": "identity"}) as response:
                 if not 200 <= response.status_code < 300:
                     raise InputError(f"Download server returned HTTP {response.status_code}.")
@@ -349,7 +353,7 @@ class Jobs:
             job.emit(f"Download complete: {received / 1048576:.1f} MiB saved as {job.filename}", percent=100)
             return target
         except requests.exceptions.SSLError:
-            raise InputError("Download certificate verification failed. Configure HOST_CA_BUNDLE with a CA bundle that trusts the download server, then recreate the GUI container.") from None
+            raise InputError("Download certificate verification failed. Enable Skip download certificate verification, or configure HOST_CA_BUNDLE with a trusted CA bundle and recreate the GUI container.") from None
         except requests.exceptions.ConnectTimeout:
             raise InputError("Connection to the download server timed out. Check its address and network access.") from None
         except requests.exceptions.ReadTimeout:

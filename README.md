@@ -34,8 +34,10 @@ in the live output window, and you can return to a running action after refreshi
 the browser. Only one action runs at a time across both tabs.
 
 Expand **Deployment options** for datastore, ISO folder, and optional GE6 NIC
-position. The GUI automatically accepts self-signed ESXi certificates. OVA
-download certificates are still verified. The existing deployment defaults apply:
+position. The GUI automatically accepts self-signed ESXi certificates.
+**Skip download certificate verification** is checked by default for lab
+downloads. Uncheck it to verify the download server’s certificate.
+The existing deployment defaults apply:
 all NICs use `VM Network`, only GE6 connects at startup, the cloud-init ISO is
 attached, automatic startup is disabled, and the VM remains off with normal
 boot settings.
@@ -113,7 +115,9 @@ and HTTPS before exposing it to untrusted networks. See [SECURITY.md](SECURITY.m
 
 The GUI trusts the Docker host's CA bundle, mounted read-only from
 `/etc/ssl/certs/ca-certificates.crt`. This lets internal download servers use the
-same corporate CAs trusted by your machine, with HTTPS verification enabled.
+same CAs trusted by your machine when **Skip download certificate verification**
+is unchecked. The checkbox is checked by default; CA configuration is optional
+when verification is skipped.
 If the bundle is elsewhere on your host, set `HOST_CA_BUNDLE` when starting it:
 
 ```bash

@@ -285,6 +285,25 @@ class WebTests(unittest.TestCase):
         self.assertEqual(response.headers['Referrer-Policy'], 'no-referrer')
         self.assertEqual(response.headers['Cross-Origin-Resource-Policy'], 'same-origin')
 
+    @patch('web.app.requests.get')
+    def test_download_tls_skip_defaults_on_and_can_be_disabled(self, get):
+        response = get.return_value.__enter__.return_value
+        response.status_code = 200; response.headers = {'Content-Length':'3'}
+        response.iter_content.return_value = [b'ova']
+        for skip in (None, True, False):
+            data = options()
+            if skip is not None:
+                data['skip_download_tls_verification'] = skip
+            job = Job(deployment_input(data), {})
+            path = Jobs(self.root).download(job)
+            self.assertIs(get.call_args.kwargs['verify'], skip is False)
+            self.assertTrue(any('certificate verification:' in line['text'] for line in job.lines))
+            path.unlink()
+        html = self.client.get('/').get_data(as_text=True)
+        self.assertIn('id="skip-download-tls" type="checkbox" checked', html)
+        with self.assertRaises(InputError):
+            deployment_input(dict(options(), skip_download_tls_verification='false'))
+
     def test_download_conflicts_and_symlinks_are_refused(self):
         self.credentials()
         directory = self.root/'OVA-download'
