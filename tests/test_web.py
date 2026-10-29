@@ -304,12 +304,23 @@ class WebTests(unittest.TestCase):
         with self.assertRaises(InputError):
             deployment_input(dict(options(), skip_download_tls_verification='false'))
 
+    @patch('web.app.requests.get')
+    def test_existing_download_is_reused_by_default_without_network_request(self, get):
+        path = self.saved_file('test.ova', b'existing')
+        job = Job(deployment_input(options()), {})
+        self.assertTrue(job.options['reuse_existing'])
+        self.assertEqual(Jobs(self.root).download(job), path)
+        self.assertEqual(path.read_bytes(), b'existing')
+        get.assert_not_called()
+        self.assertFalse(deployment_input(options(reuse_existing=False))['reuse_existing'])
+        self.assertIn('id="reuse-existing" type="checkbox" checked', self.client.get('/').get_data(as_text=True))
+
     def test_download_conflicts_and_symlinks_are_refused(self):
         self.credentials()
         directory = self.root/'OVA-download'
         directory.mkdir()
         (directory/'test.ova').write_bytes(b'existing')
-        self.assertEqual(self.client.post('/api/jobs', json=options()).status_code, 400)
+        self.assertEqual(self.client.post('/api/jobs', json=options(reuse_existing=False)).status_code, 400)
         (directory/'test.ova').unlink()
         (directory/'test.ova').symlink_to(self.root/'creds.json')
         data = options(reuse_existing=True)

@@ -22,7 +22,8 @@ disk space. This limit applies to the downloaded file, not its virtual disks.
 The GUI saves downloads into **`OVA-download/` in this repository**. The library
 lists completed files with their size and saved date, and refreshes automatically.
 Existing files are never overwritten; **Reuse this file if already downloaded**
-lets you keep a previously saved file. **Delete** removes the saved file after
+is checked by default and reuses the saved file with the same filename without
+downloading it again. Uncheck it to reject an existing filename. **Delete** removes the saved file after
 confirmation, without modifying any deployed VM. Files in use cannot be deleted;
 partial downloads and symbolic links are excluded from the library.
 

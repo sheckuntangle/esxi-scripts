@@ -168,7 +168,7 @@ def deployment_input(data):
                 ge6_nic=ge6, nic_mappings=nic_input(data.get("nic_mappings", [])),
                 network_host=str(data.get("network_host", "")), network_user=str(data.get("network_user", "")),
                 download_only=data.get("download_only") is True,
-                skip_download_tls_verification=data.get("skip_download_tls_verification", True), insecure=True, reuse_existing=source == "downloaded" or data.get("reuse_existing", False))
+                skip_download_tls_verification=data.get("skip_download_tls_verification", True), insecure=True, reuse_existing=source == "downloaded" or data.get("reuse_existing", True))
 
 
 def action_input(data):
