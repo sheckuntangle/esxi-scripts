@@ -30,7 +30,8 @@ The workspace currently has no Git commits, so Git history could not be audited.
 ## Verification results
 
 - 84 unit/regression tests passed both locally with updated dependencies and
-  inside the rebuilt Python 3.12 Docker image.
+  inside the rebuilt Python 3.12 Docker image. The subsequent network-access
+  update passes 86 tests, including remote hostname/IP and optional host-allowlist checks.
 - Browser checks passed for downloads, saved OVA deployment, interface mappings,
   cloning/network fixtures, progress output, reconnect, and desktop/mobile layouts.
   Tests simulate mutations; no VM was deployed, cloned, powered off, or deleted.
@@ -60,13 +61,17 @@ an exploitable defect or silently suppressing them.
 
 ## Trust and deployment boundaries
 
-- The GUI has **no application login**. Compose publishes it only on
-  `127.0.0.1:8080`. Anyone with access to that local endpoint can use the saved
-  ESXi account, change credentials, download/delete OVAs, clone VMs, or create
-  networks. Host validation, JSON-only writes, cross-origin write checks, and
-  CSP mitigate browser attacks; they do not provide user authentication.
-  Do not publish the port or place it behind a shared reverse proxy without
-  authentication, HTTPS, and an appropriate host/origin configuration.
+- The GUI has **no application login**. At the user's request, Compose now
+  publishes port 8080 on all IPv4 interfaces (`0.0.0.0:8080`). Anyone who can
+  reach that port can use the saved ESXi account, change credentials,
+  download/delete OVAs, clone VMs, or create networks. Restrict access with
+  network/firewall rules, and use authentication and HTTPS for untrusted networks.
+  Browser cross-origin write checks, JSON-only writes, and CSP remain enabled;
+  these do not provide user authentication. Hostnames/IPs are accepted by default.
+  Set `GUI_TRUSTED_HOSTS` to a comma-separated list of known server hostnames and
+  IPs to restrict Host headers and reduce DNS-rebinding exposure. Include
+  `localhost,127.0.0.1` for local access and the container healthcheck. This
+  allowlist checks the requested server name, not the client's source IP.
 - GUI ESXi HTTPS connections intentionally skip certificate and hostname
   verification, per the lab requirement. Traffic is encrypted, but an active
   attacker on that path could impersonate ESXi and capture credentials.

@@ -10,7 +10,7 @@ Start the OVA deployment GUI from this repository:
 docker compose up -d --build
 ```
 
-Open **http://localhost:8080**. In **Downloaded OVAs**, supply an HTTP/HTTPS
+Open **http://SERVER-IP:8080** from another machine, or **http://localhost:8080** on the server. In **Downloaded OVAs**, supply an HTTP/HTTPS
 OVA download link and click **Download OVA**. An optional **Save file as** field
 renames the download; otherwise the file name comes from the link. Links
 without an OVA filename need an explicit name. `.ova` is added if omitted.
@@ -101,11 +101,15 @@ different user, set the matching IDs when starting it:
 LOCAL_UID=$(id -u) LOCAL_GID=$(id -g) docker compose up -d --build
 ```
 
-Image builds use host networking to fetch Python dependencies. The running GUI
-uses its own Docker network and publishes only the localhost port above.
-The GUI has no application login: access to this port grants control through
-the saved ESXi account. Keep it local; see [SECURITY.md](SECURITY.md) before
-changing its network exposure.
+Image builds use Docker's default network and require no host-network build
+entitlement. The GUI publishes TCP port 8080 on all IPv4 interfaces (`0.0.0.0`).
+Open `http://SERVER-IP:8080`; the server firewall must allow inbound TCP 8080
+from the clients that need access. The server also needs outbound HTTPS/SSH to
+ESXi and access to the OVA download servers.
+
+The GUI has no application login: anyone who can reach this port can use the
+saved ESXi account. Restrict access to your trusted lab network; use authentication
+and HTTPS before exposing it to untrusted networks. See [SECURITY.md](SECURITY.md).
 
 The GUI trusts the Docker host's CA bundle, mounted read-only from
 `/etc/ssl/certs/ca-certificates.crt`. This lets internal download servers use the
@@ -119,12 +123,22 @@ HOST_CA_BUNDLE=/path/to/ca-bundle.pem docker compose up -d --build
 No CA certificates are copied into the image or repository. This setting applies
 to downloads; the GUI accepts ESXi certificates automatically.
 
-The GUI is intended for a single local administrator and binds only to
-`127.0.0.1:8080`. It has no login screen. For access from another machine, use
-an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 user@docker-host`) and open
-`http://localhost:8080` locally. Keep it behind authentication and HTTPS if
-you choose to expose it more broadly. The application accepts localhost host
-headers only and rejects browser cross-origin writes.
+Hostnames and IP addresses are accepted by default, and browser cross-origin
+writes are rejected. For a known server address, set an optional host allowlist
+in a local `.env` file (ignored by Git), including loopback for the healthcheck:
+
+```dotenv
+GUI_TRUSTED_HOSTS=jumpbox,192.0.2.10,localhost,127.0.0.1
+```
+
+Recreate the container after changing environment settings:
+
+```bash
+docker compose up -d --build
+```
+
+If updating a checkout that has local changes to `compose.yaml`, back it up
+before restoring that file and pulling the repository changes.
 
 For local development and the complete test suite:
 

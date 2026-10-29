@@ -42,7 +42,21 @@ class WebTests(unittest.TestCase):
     def test_cross_origin_and_non_json_writes_rejected(self):
         self.assertEqual(self.client.post('/api/connection', json={}, headers={'Origin': 'https://evil.example'}).status_code, 403)
         self.assertEqual(self.client.post('/api/connection', data='host=test').status_code, 415)
-        self.assertEqual(self.client.get('/', headers={'Host': 'untrusted.example'}).status_code, 400)
+
+    def test_remote_hostnames_and_ips_allow_same_origin_requests(self):
+        for host in ('jumpbox:8080', '192.0.2.10:8080', '[2001:db8::10]:8080'):
+            self.assertEqual(self.client.get('/', headers={'Host': host}).status_code, 200)
+            response = self.client.post('/api/connection', headers={'Host':host, 'Origin':'http://'+host},
+                                        json=dict(host='esxi.test', user='test', password='fixture-password'))
+            self.assertEqual(response.status_code, 200)
+            response = self.client.post('/api/connection', headers={'Host':host, 'Origin':'http://other.example'}, json={})
+            self.assertEqual(response.status_code, 403)
+
+    def test_optional_host_allowlist_rejects_unconfigured_hosts(self):
+        with patch.dict('os.environ', {'GUI_TRUSTED_HOSTS':'jumpbox,192.0.2.10,localhost,127.0.0.1'}):
+            client = create_app(self.root).test_client()
+        self.assertEqual(client.get('/', headers={'Host':'jumpbox:8080'}).status_code, 200)
+        self.assertEqual(client.get('/', headers={'Host':'untrusted.example:8080'}).status_code, 400)
 
     def test_only_http_downloads_and_plain_filenames_allowed(self):
         for updates in (dict(url='file:///etc/passwd'), dict(url='https://user:secret@example.com/file.ova'),

@@ -435,7 +435,8 @@ class Jobs:
 def create_app(root=None):
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = 32 * 1024
-    app.config["TRUSTED_HOSTS"] = ["localhost", "127.0.0.1", "[::1]"]
+    trusted_hosts = [host.strip() for host in os.environ.get("GUI_TRUSTED_HOSTS", "").split(",") if host.strip()]
+    app.config["TRUSTED_HOSTS"] = trusted_hosts or None
     root = Path(root or Path(__file__).resolve().parents[1])
     jobs = Jobs(root)
     app.extensions["jobs"] = jobs

@@ -2,11 +2,10 @@ services:
   gui:
     build:
       context: .
-      network: host
     user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     init: true
     ports:
-      - "127.0.0.1:8080:8080"
+      - "0.0.0.0:8080:8080"
     volumes:
       - .:/workspace
       - ${HOST_CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}:/etc/ssl/certs/host-ca-certificates.crt:ro
@@ -15,6 +14,7 @@ services:
       REQUESTS_CA_BUNDLE: /etc/ssl/certs/host-ca-certificates.crt
       SSL_CERT_FILE: /etc/ssl/certs/host-ca-certificates.crt
       ESXI_KNOWN_HOSTS: /etc/esxi/known_hosts
+      GUI_TRUSTED_HOSTS: ${GUI_TRUSTED_HOSTS:-}
       MAX_OVA_DOWNLOAD_BYTES: ${MAX_OVA_DOWNLOAD_BYTES:-53687091200}
     restart: unless-stopped
     stop_grace_period: 30s
