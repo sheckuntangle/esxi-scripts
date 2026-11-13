@@ -433,8 +433,11 @@ let veloDownloadSelection = false;
 function veloBusy(value) {
   $('velo-download-fields').disabled = value;
   $('velo-transfer-fields').disabled = value;
+  $('velo-device-fields').disabled = value;
+  $('velo-update-fields').disabled = value;
+  $('velo-update-button').textContent = value ? 'Action in progress' : 'Run swupdater';
   $('velo-download-button').textContent = value ? 'Action in progress' : 'Download file';
-  $('velo-transfer-button').textContent = value ? 'Action in progress' : $('velo-run-update').checked ? 'Upload & update' : 'Upload to /tmp';
+  $('velo-transfer-button').textContent = value ? 'Action in progress' : 'Upload to /tmp';
   document.querySelectorAll('[data-kind="velo-use"]').forEach(button => { button.disabled = value; });
 }
 
@@ -480,7 +483,7 @@ async function refreshVeloLibrary() {
 }
 
 $('velo-refresh-library').addEventListener('click', refreshVeloLibrary);
-$('velo-run-update').addEventListener('change', () => veloBusy(busy));
+$('velo-device-form').addEventListener('submit', event => event.preventDefault());
 $('velo-download-form').addEventListener('submit', async event => {
   event.preventDefault(); if (busy) return;
   $('velo-download-message').textContent = ''; setBusy(true);
@@ -489,15 +492,18 @@ $('velo-download-form').addEventListener('submit', async event => {
     veloDownloadSelection = true; follow(data.job,true); refreshVeloLibrary();
   } catch (error) { $('velo-download-message').textContent = error.message; setBusy(false); }
 });
-$('velo-transfer-form').addEventListener('submit', async event => {
-  event.preventDefault(); if (busy) return;
-  $('velo-transfer-message').textContent = ''; setBusy(true);
-  try {
-    const data = await api('/api/jobs', {method:'POST', body:JSON.stringify({kind:'velo',filename:$('velo-saved-file').value,host:$('velo-host').value,user:$('velo-user').value,password:$('velo-password').value,run_update:$('velo-run-update').checked})});
-    $('velo-password').value = '';
-    follow(data.job,true); refreshVeloLibrary();
-  } catch (error) { $('velo-transfer-message').textContent = error.message; setBusy(false); }
-});
+for (const operation of ['transfer', 'update']) {
+  $(`velo-${operation}-form`).addEventListener('submit', async event => {
+    event.preventDefault(); if (busy || !$('velo-device-form').reportValidity()) return;
+    const filename = operation === 'transfer' ? $('velo-saved-file').value : $('velo-update-filename').value;
+    $(`velo-${operation}-message`).textContent = ''; setBusy(true);
+    try {
+      const data = await api('/api/jobs', {method:'POST', body:JSON.stringify({kind:'velo',operation,filename,host:$('velo-host').value,user:$('velo-user').value,password:$('velo-password').value})});
+      $('velo-password').value = '';
+      follow(data.job,true); refreshVeloLibrary();
+    } catch (error) { $(`velo-${operation}-message`).textContent = error.message; setBusy(false); }
+  });
+}
 
 
 async function initialize() {

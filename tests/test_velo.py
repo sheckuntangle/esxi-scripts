@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import MagicMock, Mock, patch
 
 import paramiko
-from web.app import Job, Jobs, create_app, action_input
+from web.app import Job, Jobs, create_app, action_input, InputError
 from web import velo
 
 
@@ -54,7 +54,7 @@ class VeloTests(unittest.TestCase):
     @patch('web.velo.SCPClient')
     @patch('web.velo.command')
     @patch('web.velo.paramiko.SSHClient')
-    def test_openwrt_scp_and_root_update_order_progress_and_host_key_policy(self, ssh, command, scp):
+    def test_openwrt_scp_only_progress_and_host_key_policy(self, ssh, command, scp):
         command.side_effect=self.response
         job=self.job()
         def upload(*args, **kwargs):
@@ -62,18 +62,15 @@ class VeloTests(unittest.TestCase):
         scp.return_value.__enter__.return_value.put.side_effect=upload
         velo.transfer(self.root,job,self.path)
         commands=[call.args[1] for call in command.call_args_list]
-        self.assertEqual(commands[0],['id','-u'])
         self.assertIn(['command','-v','scp'],commands)
         self.assertIn(['df','-Pk','/tmp'],commands)
-        self.assertEqual(commands[-1],['/root/swupdater',self.path.name])
-        self.assertEqual(command.call_args.kwargs['workdir'],'/tmp')
+        self.assertFalse(any(c[0] in ('id', '/root/swupdater') for c in commands))
         self.assertTrue(any(c[0]=='wc' for c in commands))
         self.assertTrue(any(c[0]=='mv' and c[-1]=='/tmp/'+self.path.name for c in commands))
         self.assertFalse(any(c[0]=='stat' for c in commands))
         self.assertIsInstance(ssh.return_value.set_missing_host_key_policy.call_args.args[0],paramiko.AutoAddPolicy)
         self.assertEqual((self.root/'velo_known_hosts').stat().st_mode & 0o777,0o600)
         self.assertTrue(any(line['percent']==50 for line in job.lines))
-        self.assertTrue(any('processing image' in line['text'] for line in job.lines))
         self.assertFalse(any(c[0]=='rm' for c in commands))
         ssh.return_value.close.assert_called_once()
 
@@ -82,7 +79,7 @@ class VeloTests(unittest.TestCase):
     @patch('web.velo.paramiko.SSHClient')
     def test_transfer_only_skips_updater_and_root_requirement(self, ssh, command, scp):
         command.side_effect=self.response
-        velo.transfer(self.root,self.job(user='vcadmin',run_update=False),self.path)
+        velo.transfer(self.root,self.job(user='vcadmin'),self.path)
         commands=[call.args[1] for call in command.call_args_list]
         self.assertFalse(any(c[0] in ('id','/root/swupdater') for c in commands))
         scp.return_value.__enter__.return_value.put.assert_called_once()
@@ -91,7 +88,7 @@ class VeloTests(unittest.TestCase):
     @patch('web.velo.command')
     @patch('web.velo.paramiko.SSHClient')
     def test_nonroot_or_insufficient_tmp_space_stops_before_upload(self, ssh, command, scp):
-        for failure in ('root','space','scp'):
+        for failure in ('space','scp'):
             def respond(client,args,**kwargs):
                 if failure=='root' and args==['id','-u']:return '1000\n'
                 if failure=='space' and args[0]=='df':return 'Filesystem Blocks Used Available Use Mounted\ntmpfs 100 99 1 99% /tmp\n'
@@ -169,13 +166,53 @@ class VeloTests(unittest.TestCase):
         self.assertEqual(self.client.post('/api/velo/downloads/delete',json={'filename':'linked.tar'}).status_code,400)
         self.assertEqual(self.client.post('/api/velo/downloads/delete',json={'filename':'image.tar.gz'}).status_code,200)
 
-    @patch('web.app.transfer_velo', side_effect=velo.VeloError('SSH closed; update completion is unconfirmed. Inspect before retrying.'))
+    @patch('web.app.update_velo', side_effect=velo.VeloError('SSH closed; update completion is unconfirmed. Inspect before retrying.'))
     def test_update_disconnect_is_not_reported_as_success(self, transfer):
         folder=self.root/'Velo-download';folder.mkdir();(folder/self.path.name).write_bytes(b'update')
-        job=self.job();Jobs(self.root).run(job)
+        job=self.job(operation='update');Jobs(self.root).run(job)
         self.assertEqual(job.status,'failed')
         self.assertIn('unconfirmed',job.lines[-1]['text'])
         self.assertFalse(any('action completed' in line['text'] for line in job.lines))
+
+    @patch('web.velo.SCPClient')
+    @patch('web.velo.command')
+    @patch('web.velo.paramiko.SSHClient')
+    def test_independent_update_checks_root_and_remote_file(self, ssh, command, scp):
+        command.side_effect=self.response
+        velo.run_update(self.root,self.job(operation='update'))
+        commands=[call.args[1] for call in command.call_args_list]
+        self.assertEqual(commands[:4],[['id','-u'],['test','-x','/root/swupdater'],['test','-f','/tmp/'+self.path.name],['test','-s','/tmp/'+self.path.name]])
+        self.assertEqual(commands[-1],['/root/swupdater',self.path.name])
+        self.assertEqual(command.call_args.kwargs['workdir'],'/tmp')
+        scp.assert_not_called()
+        for failure in ('root','file'):
+            def respond(client,args,**kwargs):
+                if failure=='root' and args==['id','-u']: return '1000'
+                if failure=='file' and args[:2]==['test','-f']: raise velo.VeloError('missing file')
+                return self.response(client,args,**kwargs)
+            command.reset_mock();command.side_effect=respond
+            with self.assertRaises(velo.VeloError): velo.run_update(self.root,self.job(operation='update'))
+            self.assertFalse(any(c.args[1][0]=='/root/swupdater' for c in command.call_args_list))
+
+    @patch('web.app.requests.get')
+    @patch('web.app.transfer_velo')
+    @patch('web.app.update_velo')
+    @patch('web.app.threading.Thread')
+    def test_remote_update_needs_no_download_and_does_not_lock_local_file(self, thread, update, transfer, get):
+        response=self.client.post('/api/jobs',json=dict(kind='velo',operation='update',filename='remote.tar',host='edge',user='root',password='secret'))
+        self.assertEqual(response.status_code,202)
+        jobs=self.client.application.extensions['jobs'];job=jobs.current
+        self.assertEqual(job.phase,'update')
+        folder=self.root/'Velo-download';folder.mkdir();(folder/'remote.tar').write_bytes(b'local')
+        self.assertEqual(self.client.post('/api/velo/downloads/delete',json=dict(filename='remote.tar')).status_code,200)
+        jobs.run(job)
+        update.assert_called_once_with(self.root,job)
+        transfer.assert_not_called();get.assert_not_called()
+        self.assertEqual(job.status,'success')
+
+    def test_combined_and_invalid_operations_rejected(self):
+        for options in (dict(run_update=True),dict(operation='unknown'),dict(operation='update',download_only=True)):
+            with self.assertRaises(InputError):self.job(**options)
 
     @patch('web.app.requests.get')
     @patch('web.app.transfer_velo')

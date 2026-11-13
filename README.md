@@ -177,19 +177,23 @@ default. The GUI does not enable root access or change the edge's SSH configurat
    Downloaded files persist in `Velo-download/` and can be selected or deleted
    from the library, independently of the OVA library. Reuse and skip-download-
    certificate-verification checkboxes are checked by default, like OVA downloads.
-2. Select a saved file, enter the edge IP/hostname, username (default `root`), and
-   password. Device credentials are separate from ESXi credentials, used for the
-   current job only, and never written to `creds.json` or returned by the API.
-3. Leave **Run /root/swupdater after the upload** checked to update, or uncheck
-   it for a file transfer only. Click **Upload & update** or **Upload to /tmp**.
+2. Enter the edge IP/hostname, username (default `root`), and password under
+   **Velo device connection**. These fields are shared by both device actions.
+   Credentials are separate from ESXi credentials and never saved to `creds.json`.
+   Re-enter the password for each action; it is cleared after a job is accepted.
+3. Under **SCP upload**, select a saved file and click **Upload to /tmp**.
+   Uploading only copies the file and never starts the updater.
+4. Separately, under **Run swupdater**, enter the name of a file already in the
+   edge's `/tmp` directory and click **Run swupdater**. No local downloaded copy
+   or preceding upload job is required. This action requires root.
 
-Transfers use the legacy SCP protocol over SSH port 22, so an SFTP subsystem is
-not required. The edge must have an SCP receiver in its SSH command path. The
-workflow checks root access and updater availability when updating, verifies SCP
-support and available `/tmp` space, then uploads into a private staging directory.
-It checks the received byte count and moves the completed file to `/tmp/NAME`.
-An existing file with that name is replaced. The updater runs as the connected
-root user from `/tmp`:
+Transfers use legacy SCP over SSH port 22; an SFTP subsystem is not required.
+The upload action checks SCP support and available `/tmp` space, uploads into a
+private staging directory, verifies the byte count, and moves the completed file
+into `/tmp/NAME`, replacing any existing file with that name. Upload credentials
+need SCP and write access; root is required only for the updater action.
+The independent updater checks root access, updater availability, and an existing
+nonempty regular file in `/tmp`, then runs:
 
 ```sh
 cd /tmp && /root/swupdater 'NAME'

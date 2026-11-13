@@ -20,7 +20,7 @@ from flask import Flask, Response, jsonify, render_template, request, stream_wit
 import requests
 import paramiko
 
-from web.velo import FILE_NAME as VELO_FILENAME, VeloError, velo_input, transfer as transfer_velo
+from web.velo import FILE_NAME as VELO_FILENAME, VeloError, velo_input, transfer as transfer_velo, run_update as update_velo
 
 from clone_vm import CloneError, inventory, load_ssh_host_keys, config_field, datastore_path, read_vmx, remote, vmx_interfaces, validate_nic_mappings
 from deploy_ova import ova_descriptor, interface_labels, objects, SmartConnect, Disconnect, vim
@@ -234,7 +234,7 @@ class Job:
         self.kind = options.get("kind", "deployment")
         self.filename = options.get("filename")
         self.status = "running"
-        self.phase = "download" if self.kind in ("deployment", "velo") else self.kind
+        self.phase = options.get("operation", "download") if self.kind == "velo" else "download" if self.kind == "deployment" else self.kind
         self.percent = 0
         self.lines = []
         self.sequence = 0
@@ -279,7 +279,7 @@ class Jobs:
 
     def in_use(self, filename, kind="deployment"):
         return bool(self.current and self.current.status == "running" and self.current.filename == filename
-                    and self.current.kind == kind)
+                    and self.current.kind == kind and self.current.options.get("operation") != "update")
 
     def downloads(self, kind="deployment"):
         result = []
@@ -320,7 +320,7 @@ class Jobs:
             if options["kind"] == "clone" and options["source_vm_id"]:
                 if options["source_host"] != credentials["host"] or options["source_user"] != credentials["user"]:
                     raise InputError("The ESXi connection changed. Refresh the source VM list and select a VM again.")
-            if options["kind"] in ("deployment", "velo"):
+            if options["kind"] in ("deployment", "velo") and options.get("operation") != "update":
                 if options.get("nic_mappings") and (options["network_host"] != credentials["host"] or options["network_user"] != credentials["user"]):
                     raise InputError("The ESXi connection changed. Reload the network list before deploying.")
                 path = download_directory(self.root, options["kind"]) / options["filename"]
@@ -408,9 +408,11 @@ class Jobs:
 
     def run(self, job):
         try:
-            path = self.download(job) if job.kind in ("deployment", "velo") else None
+            path = self.download(job) if job.kind in ("deployment", "velo") and job.options.get("operation") != "update" else None
             if job.kind == "velo":
-                if not job.options["download_only"]:
+                if job.options["operation"] == "update":
+                    update_velo(self.root, job)
+                elif not job.options["download_only"]:
                     transfer_velo(self.root, job, path)
                 job.emit("Velo download completed." if job.options["download_only"] else "Velo action completed.", phase="done", percent=100)
                 job.finish(True)

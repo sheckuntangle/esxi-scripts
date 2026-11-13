@@ -145,18 +145,32 @@
           <p id="velo-library-empty" class="library-empty">No downloaded Velo files yet.</p>
         </section>
         <div class="workspace-grid misc-grid">
-          <section class="deployment card" aria-labelledby="velo-transfer-heading">
-            <div class="section-heading"><div class="heading-icon">⇧</div><div><h2 id="velo-transfer-heading">Upload to Velo</h2><p>Copy a saved file to /tmp and optionally run the updater.</p></div></div>
-            <form id="velo-transfer-form"><fieldset id="velo-transfer-fields">
-              <label>Saved file <span class="required">*</span><select id="velo-saved-file" required><option value="">Select a downloaded file</option></select></label>
+          <div class="misc-forms">
+          <section class="deployment card" aria-labelledby="velo-device-heading">
+            <div class="section-heading"><div class="heading-icon">⌘</div><div><h2 id="velo-device-heading">Velo device connection</h2><p>Used by SCP and swupdater. Re-enter the password for each action.</p></div></div>
+            <form id="velo-device-form"><fieldset id="velo-device-fields">
               <label>Velo IP address or hostname <span class="required">*</span><input id="velo-host" required placeholder="10.247.111.215" autocomplete="off"></label>
               <label>Username <span class="required">*</span><input id="velo-user" required value="root" autocomplete="section-velo username"></label>
               <label>Password <span class="required">*</span><input id="velo-password" required type="password" autocomplete="section-velo current-password"><span class="field-help">Used for this job only; not saved to creds.json.</span></label>
-              <label class="check"><input id="velo-run-update" type="checkbox" checked><span>Run /root/swupdater after the upload (may restart the device)</span></label>
-              <p id="velo-transfer-message" class="message error" role="alert"></p>
-              <button id="velo-transfer-button" class="button primary" type="submit">Upload &amp; update</button>
             </fieldset></form>
           </section>
+          <section class="deployment card" aria-labelledby="velo-transfer-heading">
+            <div class="section-heading"><div class="heading-icon">⇧</div><div><h2 id="velo-transfer-heading">SCP upload</h2><p>Copy a saved file to the edge's /tmp directory.</p></div></div>
+            <form id="velo-transfer-form"><fieldset id="velo-transfer-fields">
+              <label>Saved file <span class="required">*</span><select id="velo-saved-file" required><option value="">Select a downloaded file</option></select></label>
+              <p id="velo-transfer-message" class="message error" role="alert"></p>
+              <button id="velo-transfer-button" class="button primary" type="submit">Upload to /tmp</button>
+            </fieldset></form>
+          </section>
+          <section class="deployment card" aria-labelledby="velo-update-heading">
+            <div class="section-heading"><div class="heading-icon">↻</div><div><h2 id="velo-update-heading">Run swupdater</h2><p>Run /root/swupdater as root using a file already in the edge's /tmp directory. The edge may restart.</p></div></div>
+            <form id="velo-update-form"><fieldset id="velo-update-fields">
+              <label>File name in /tmp <span class="required">*</span><input id="velo-update-filename" required maxlength="180" placeholder="edge-update.tar.gz"><span class="field-help">Enter the file name only. A local downloaded copy is not required.</span></label>
+              <p id="velo-update-message" class="message error" role="alert"></p>
+              <button id="velo-update-button" class="button primary" type="submit">Run swupdater</button>
+            </fieldset></form>
+          </section>
+          </div>
         <section class="output card" aria-labelledby="velo-output-heading">
           <div class="section-heading"><div class="heading-icon terminal-icon">›_</div><div><h2 id="velo-output-heading">Live output</h2><p id="velo-job-caption">Follow downloads, SCP transfers, and updater output.</p></div><span id="velo-job-status" class="pill">Ready</span></div>
           <div class="progress-area"><div class="progress-label"><span id="velo-phase-label">Waiting for an action</span><strong id="velo-progress-label">—</strong></div><progress id="velo-job-progress" value="0" max="100" aria-label="Current action progress"></progress><div class="stage-labels"><span id="velo-stage-download">01 <b>Download</b></span><span id="velo-stage-transfer">02 <b>SCP</b></span><span id="velo-stage-update">03 <b>Update</b></span><span id="velo-stage-done">04 <b>Complete</b></span></div></div>

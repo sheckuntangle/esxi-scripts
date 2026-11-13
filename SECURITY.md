@@ -112,7 +112,8 @@ an exploitable defect or silently suppressing them.
 
 ## Velo OpenWrt workflow (2026-11-13)
 
-Velo actions can upload a file and run `/root/swupdater` using root credentials.
+Velo uploads and `/root/swupdater` runs are separate, explicit actions. Uploads
+never start the updater. Only the updater action requires root credentials.
 Anyone with GUI access can submit device credentials and perform these actions.
 The password is submitted to the GUI, kept in the job's memory, redacted from job
 output, and not saved to disk. An HTTP GUI connection does not protect the
@@ -128,8 +129,9 @@ File names are restricted to plain names, and every remote command argument is
 shell-quoted. SCP writes into a new mode-0700 staging directory under `/tmp`,
 preventing a predictable filename from following a preexisting staging symlink.
 The completed file replaces `/tmp/NAME` after its byte count is checked. Device
-commands use BusyBox-compatible forms; preflight checks include root access,
-updater availability, SCP support, and RAM-backed `/tmp` capacity. The arbitrary
+commands use BusyBox-compatible forms. Upload checks SCP support and RAM-backed
+`/tmp` capacity; updater checks root, updater availability, and an existing nonempty
+regular file on the edge. Updating requires no local downloaded copy. The arbitrary
 shell command is not configurable through the GUI: the updater path is fixed.
 The file itself is trusted operator input; firmware signatures, hardware/image
 compatibility, and post-reboot health are not independently checked.
@@ -147,8 +149,8 @@ of unknown Velo keys. It does not bypass checks for a changed recorded key.
 Remote command execution flags (B601) were reviewed for per-argument quoting;
 `/tmp` flags (B108) correspond to the requested destination and private staging.
 
-Velo verification: 108 unit/regression tests pass locally. Browser fixture checks
-cover the three tabs, tracked downloads, transfer/update output, optional updater,
+Velo verification: 111 unit/regression tests pass locally. Browser fixture checks
+cover the three tabs, tracked downloads, separate transfer/update output and actions,
 reconnect, shared job locks, deletion, and desktop/mobile layout. The rebuilt
 image dependency audit reports no known Python package vulnerabilities as of
 2026-11-13. These checks do not verify a real edge update or OpenWrt firmware.

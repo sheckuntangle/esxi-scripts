@@ -1,6 +1,7 @@
-"""Velo device file transfer and optional software update over SSH/SCP."""
+"""Independent Velo device file transfer and software update over SSH/SCP."""
 
 import codecs
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import re
@@ -24,6 +25,12 @@ def velo_input(data):
     for key in ('download_only', 'run_update', 'reuse_existing', 'skip_download_tls_verification'):
         if key in data and type(data[key]) is not bool:
             raise ValueError(f'{key} must be true or false.')
+    operation = data.get('operation', 'download' if download_only else 'transfer')
+    if operation not in ('download', 'transfer', 'update') or (download_only and operation != 'download'):
+        raise ValueError('Select a download, SCP upload, or updater action.')
+    download_only = operation == 'download'
+    if data.get('run_update') is True:
+        raise ValueError('SCP and swupdater are separate actions. Use the Run swupdater section.')
     url = str(data.get('url', '')).strip()
     filename = str(data.get('filename', '')).strip()
     if download_only:
@@ -47,9 +54,9 @@ def velo_input(data):
         if not isinstance(password, str) or not password:
             raise ValueError('Enter the Velo device password.')
         credentials = dict(host=host.strip(), user=user.strip(), password=password)
-    return dict(kind='velo', name='Download ' + filename if download_only else 'Transfer to ' + credentials['host'],
-                filename=filename, source='url' if download_only else 'downloaded', url=url if download_only else '',
-                download_only=download_only, run_update=data.get('run_update', True),
+    return dict(kind='velo', name='Download ' + filename if download_only else ('Update on ' if operation == 'update' else 'Transfer to ') + credentials['host'],
+                filename=filename, source='url' if download_only else 'remote' if operation == 'update' else 'downloaded', url=url if download_only else '',
+                download_only=download_only, operation=operation,
                 reuse_existing=data.get('reuse_existing', True),
                 skip_download_tls_verification=data.get('skip_download_tls_verification', True),
                 device_credentials=credentials)
@@ -106,24 +113,23 @@ def command(client, args, emit=None, timeout=120, workdir=None):
         channel.close()
 
 
-def transfer(root, job, path):
+@contextmanager
+def device_session(root, job, phase):
     credentials = job.credentials
-    remote_path = '/tmp/' + job.filename
-    staging_dir = '/tmp/.velo-' + job.id
-    staging = staging_dir + '/payload'
     client = paramiko.SSHClient()
-    uploaded = False
-    staging_created = False
     try:
         keys = Path(root) / 'velo_known_hosts'
         if keys.is_symlink() or (keys.exists() and not keys.is_file()):
             raise VeloError('velo_known_hosts must be a regular file, not a symbolic link.')
         fd = os.open(keys, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-        os.fchmod(fd, 0o600); os.close(fd)
+        try:
+            os.fchmod(fd, 0o600)
+        finally:
+            os.close(fd)
         client.load_host_keys(str(keys))
         # Trust on first use, as requested. Previously recorded changed keys still fail.
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        job.emit('Connecting to Velo ' + credentials['host'] + ':22 as ' + credentials['user'], phase='transfer', percent=0)
+        job.emit('Connecting to Velo ' + credentials['host'] + ':22 as ' + credentials['user'], phase=phase, percent=0)
         job.emit('Unknown SSH host keys are accepted and saved automatically; changed keys are rejected.')
         client.connect(credentials['host'], username=credentials['user'], password=credentials['password'],
                        look_for_keys=False, allow_agent=False, timeout=20, banner_timeout=20, auth_timeout=20)
@@ -131,48 +137,7 @@ def transfer(root, job, path):
         banner = client.get_transport().get_banner()
         if banner:
             job.emit(banner.decode('utf-8', errors='replace') if isinstance(banner, bytes) else banner)
-        if job.options['run_update']:
-            job.emit('Checking root access and /root/swupdater')
-            if command(client, ['id', '-u']).strip() != '0':
-                raise VeloError('Running /root/swupdater requires root. Configure root password login; vcadmin cannot update by default.')
-            command(client, ['test', '-x', '/root/swupdater'])
-        job.emit('Checking OpenWrt SCP support and free space in /tmp (usually RAM-backed)')
-        try:
-            command(client, ['command', '-v', 'scp'])
-        except VeloError:
-            raise VeloError('The edge needs an SCP receiver available in its SSH command path. SFTP is not required; check SCP support on this firmware.') from None
-        listing = command(client, ['df', '-Pk', '/tmp']).splitlines()
-        try:
-            available = int(listing[-1].split()[3]) * 1024
-        except (IndexError, ValueError):
-            raise VeloError('Could not determine free space in the edge /tmp directory; upload was not started.') from None
-        if available < path.stat().st_size + 16 * 1024**2:
-            raise VeloError('Not enough free space in edge /tmp for this file plus a 16 MiB reserve. /tmp is usually RAM-backed on OpenWrt.')
-        command(client, ['test', '!', '-d', remote_path])
-        command(client, ['mkdir', '-m', '700', staging_dir])
-        staging_created = True
-        last_percent = -1
-        def progress(filename, total, sent):
-            nonlocal last_percent
-            percent = min(100, int(sent * 100 / max(total, 1)))
-            if percent != last_percent:
-                job.emit(f'SCP upload: {percent}% ({sent / 1048576:.1f}/{total / 1048576:.1f} MiB)', phase='transfer', percent=percent)
-                last_percent = percent
-        job.emit('Uploading ' + job.filename + ' to device /tmp')
-        with SCPClient(client.get_transport(), progress=progress, socket_timeout=120) as scp:
-            scp.put(str(path), remote_path=staging)
-        job.emit('Verifying uploaded file size')
-        if command(client, ['wc', '-c', staging]).split()[0] != str(path.stat().st_size):
-            raise VeloError('Uploaded size does not match the saved file. Updater was not started.')
-        command(client, ['mv', '-f', staging, remote_path])
-        uploaded = True
-        command(client, ['rmdir', staging_dir])
-        staging_created = False
-        job.emit('Transfer complete: ' + remote_path, phase='transfer', percent=100)
-        if job.options['run_update']:
-            job.emit('Running in /tmp: /root/swupdater ' + shlex.quote(job.filename) + '. The edge may restart; a disconnected session cannot confirm completion.', phase='update', percent=0)
-            command(client, ['/root/swupdater', job.filename], emit=job.emit, timeout=7200, workdir='/tmp')
-            job.emit('swupdater exited successfully. Check the device for its resulting version and health.')
+        yield client
     except paramiko.AuthenticationException:
         raise VeloError('Velo SSH authentication failed. Check the username, password, and root SSH login configuration.') from None
     except paramiko.BadHostKeyException:
@@ -182,12 +147,70 @@ def transfer(root, job, path):
     except Exception:
         raise VeloError('Velo transfer/update failed. Check SSH/SCP support, permissions, disk space, and device connectivity; inspect the device before retrying.') from None
     finally:
-        # Best-effort cleanup of this job's partial upload only; retain completed files.
-        if staging_created and client.get_transport() and client.get_transport().is_active():
-            try:
-                if not uploaded:
-                    command(client, ['rm', '-f', staging], timeout=10)
-                command(client, ['rmdir', staging_dir], timeout=10)
-            except Exception:
-                job.emit('Could not remove temporary upload directory ' + staging_dir + '; inspect the device.')
         client.close()
+
+
+def run_update(root, job):
+    remote_path = '/tmp/' + job.filename
+    with device_session(root, job, 'update') as client:
+        job.emit('Checking root access, /root/swupdater, and existing file ' + remote_path)
+        if command(client, ['id', '-u']).strip() != '0':
+            raise VeloError('Running /root/swupdater requires root. Configure root password login; vcadmin cannot update by default.')
+        command(client, ['test', '-x', '/root/swupdater'])
+        command(client, ['test', '-f', remote_path])
+        command(client, ['test', '-s', remote_path])
+        job.emit('Running in /tmp: /root/swupdater ' + shlex.quote(job.filename) + '. The edge may restart; a disconnected session cannot confirm completion.', phase='update', percent=0)
+        command(client, ['/root/swupdater', job.filename], emit=job.emit, timeout=7200, workdir='/tmp')
+        job.emit('swupdater exited successfully. Check the device for its resulting version and health.')
+
+
+def transfer(root, job, path):
+    remote_path = '/tmp/' + job.filename
+    staging_dir = '/tmp/.velo-' + job.id
+    staging = staging_dir + '/payload'
+    uploaded = False
+    staging_created = False
+    with device_session(root, job, 'transfer') as client:
+        try:
+            job.emit('Checking OpenWrt SCP support and free space in /tmp (usually RAM-backed)')
+            try:
+                command(client, ['command', '-v', 'scp'])
+            except VeloError:
+                raise VeloError('The edge needs an SCP receiver available in its SSH command path. SFTP is not required; check SCP support on this firmware.') from None
+            listing = command(client, ['df', '-Pk', '/tmp']).splitlines()
+            try:
+                available = int(listing[-1].split()[3]) * 1024
+            except (IndexError, ValueError):
+                raise VeloError('Could not determine free space in the edge /tmp directory; upload was not started.') from None
+            if available < path.stat().st_size + 16 * 1024**2:
+                raise VeloError('Not enough free space in edge /tmp for this file plus a 16 MiB reserve. /tmp is usually RAM-backed on OpenWrt.')
+            command(client, ['test', '!', '-d', remote_path])
+            command(client, ['mkdir', '-m', '700', staging_dir])
+            staging_created = True
+            last_percent = -1
+            def progress(filename, total, sent):
+                nonlocal last_percent
+                percent = min(100, int(sent * 100 / max(total, 1)))
+                if percent != last_percent:
+                    job.emit(f'SCP upload: {percent}% ({sent / 1048576:.1f}/{total / 1048576:.1f} MiB)', phase='transfer', percent=percent)
+                    last_percent = percent
+            job.emit('Uploading ' + job.filename + ' to device /tmp')
+            with SCPClient(client.get_transport(), progress=progress, socket_timeout=120) as scp:
+                scp.put(str(path), remote_path=staging)
+            job.emit('Verifying uploaded file size')
+            if command(client, ['wc', '-c', staging]).split()[0] != str(path.stat().st_size):
+                raise VeloError('Uploaded size does not match the saved file. Updater was not started.')
+            command(client, ['mv', '-f', staging, remote_path])
+            uploaded = True
+            command(client, ['rmdir', staging_dir])
+            staging_created = False
+            job.emit('Transfer complete: ' + remote_path, phase='transfer', percent=100)
+        finally:
+            # Best-effort cleanup of this job's partial upload only; retain completed files.
+            if staging_created and client.get_transport() and client.get_transport().is_active():
+                try:
+                    if not uploaded:
+                        command(client, ['rm', '-f', staging], timeout=10)
+                    command(client, ['rmdir', staging_dir], timeout=10)
+                except Exception:
+                    job.emit('Could not remove temporary upload directory ' + staging_dir + '; inspect the device.')
