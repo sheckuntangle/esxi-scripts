@@ -20,6 +20,8 @@ from flask import Flask, Response, jsonify, render_template, request, stream_wit
 import requests
 import paramiko
 
+from web.velo import FILE_NAME as VELO_FILENAME, VeloError, velo_input, transfer as transfer_velo
+
 from clone_vm import CloneError, inventory, load_ssh_host_keys, config_field, datastore_path, read_vmx, remote, vmx_interfaces, validate_nic_mappings
 from deploy_ova import ova_descriptor, interface_labels, objects, SmartConnect, Disconnect, vim
 
@@ -33,10 +35,10 @@ class InputError(Exception):
 
 
 
-def download_directory(root):
-    directory = root / "OVA-download"
+def download_directory(root, kind="deployment"):
+    directory = root / ("Velo-download" if kind == "velo" else "OVA-download")
     if directory.is_symlink() or (directory.exists() and not directory.is_dir()):
-        raise InputError("OVA-download must be a real directory inside the repository, not a symbolic link.")
+        raise InputError(f"{directory.name} must be a real directory inside the repository, not a symbolic link.")
     return directory
 
 
@@ -195,6 +197,11 @@ def deployment_input(data):
 
 def action_input(data):
     kind = data.get("kind", "deployment")
+    if kind == "velo":
+        try:
+            return velo_input(data)
+        except ValueError as exc:
+            raise InputError(str(exc)) from None
     if kind == "deployment":
         return dict(deployment_input(data), kind=kind)
     name = str(data.get("name", "")).strip()
@@ -227,7 +234,7 @@ class Job:
         self.kind = options.get("kind", "deployment")
         self.filename = options.get("filename")
         self.status = "running"
-        self.phase = "download" if self.kind == "deployment" else self.kind
+        self.phase = "download" if self.kind in ("deployment", "velo") else self.kind
         self.percent = 0
         self.lines = []
         self.sequence = 0
@@ -270,50 +277,53 @@ class Jobs:
         self.lock = threading.Lock()
         self.current = None
 
-    def in_use(self, filename):
-        return bool(self.current and self.current.status == "running" and self.current.filename == filename)
+    def in_use(self, filename, kind="deployment"):
+        return bool(self.current and self.current.status == "running" and self.current.filename == filename
+                    and self.current.kind == kind)
 
-    def downloads(self):
+    def downloads(self, kind="deployment"):
         result = []
         with self.lock:
-            directory = download_directory(self.root)
+            directory = download_directory(self.root, kind)
+            pattern = VELO_FILENAME if kind == "velo" else FILENAME
             for path in directory.iterdir() if directory.exists() else []:
-                if not FILENAME.fullmatch(path.name) or path.is_symlink() or not path.is_file():
+                if not pattern.fullmatch(path.name) or path.is_symlink() or not path.is_file():
                     continue
                 stat = path.stat()
                 result.append(dict(name=path.name, size=stat.st_size,
                     modified=datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
-                    in_use=self.in_use(path.name)))
+                    in_use=self.in_use(path.name, kind)))
         return sorted(result, key=lambda item: item["modified"], reverse=True)
 
-    def delete_download(self, filename):
-        if not isinstance(filename, str) or not FILENAME.fullmatch(filename):
-            raise InputError("Select a valid OVA file name. Paths are not allowed.")
+    def delete_download(self, filename, kind="deployment"):
+        pattern = VELO_FILENAME if kind == "velo" else FILENAME
+        if not isinstance(filename, str) or not pattern.fullmatch(filename):
+            raise InputError("Select a valid file name. Paths are not allowed.")
         with self.lock:
-            if self.in_use(filename):
-                raise InputError("This OVA is being used by the active deployment and cannot be deleted.")
-            path = download_directory(self.root) / filename
+            if self.in_use(filename, kind):
+                raise InputError("This file is being used by the active action and cannot be deleted.")
+            path = download_directory(self.root, kind) / filename
             if path.is_symlink() or not path.is_file():
-                raise InputError("The selected OVA no longer exists or is not a regular file.")
+                raise InputError("The selected file no longer exists or is not a regular file.")
             path.unlink()
 
     def start(self, data):
         options = action_input(data)
         with self.lock:
             if self.current and self.current.status == "running":
-                raise InputError("An ESXi action is already running. Wait for it to finish.")
-            credentials = read_credentials(self.root)
+                raise InputError("An action is already running. Wait for it to finish.")
+            credentials = options.pop("device_credentials") if options["kind"] == "velo" else read_credentials(self.root)
             if not options.get("download_only") and not all(credentials.get(key) for key in ("host", "user", "password")):
-                raise InputError("Save the ESXi connection before starting an action.")
+                raise InputError("Configure the connection before starting an action.")
             if options["kind"] == "clone" and options["nic_mappings"] and not options["source_vm_id"]:
                 raise InputError("Select a source VM by ID before changing its interfaces.")
             if options["kind"] == "clone" and options["source_vm_id"]:
                 if options["source_host"] != credentials["host"] or options["source_user"] != credentials["user"]:
                     raise InputError("The ESXi connection changed. Refresh the source VM list and select a VM again.")
-            if options["kind"] == "deployment":
-                if options["nic_mappings"] and (options["network_host"] != credentials["host"] or options["network_user"] != credentials["user"]):
+            if options["kind"] in ("deployment", "velo"):
+                if options.get("nic_mappings") and (options["network_host"] != credentials["host"] or options["network_user"] != credentials["user"]):
                     raise InputError("The ESXi connection changed. Reload the network list before deploying.")
-                path = download_directory(self.root) / options["filename"]
+                path = download_directory(self.root, options["kind"]) / options["filename"]
                 if (path.exists() or path.is_symlink()) and not options["reuse_existing"]:
                     raise InputError("That download already exists. Choose a different file name or enable reuse.")
                 if path.is_symlink():
@@ -326,18 +336,18 @@ class Jobs:
             return job
 
     def download(self, job):
-        directory = download_directory(self.root)
+        directory = download_directory(self.root, job.kind)
         directory.mkdir(exist_ok=True)
         target = directory / job.filename
         if target.exists():
             if not job.options["reuse_existing"] or not target.is_file() or target.is_symlink():
                 raise InputError("Download path already exists and cannot be reused.")
-            job.emit(f"Using existing download: OVA-download/{job.filename}", percent=100)
+            job.emit(f"Using existing download: {directory.name}/{job.filename}", percent=100)
             return target
         if job.options.get("source") == "downloaded":
             raise InputError("The selected OVA no longer exists.")
-        temporary = directory / (job.filename + "." + job.id + ".part")
-        job.emit(f"Downloading OVA to OVA-download/{job.filename}", percent=0)
+        temporary = directory / ("." + job.filename + "." + job.id + ".part")
+        job.emit(f"Downloading {'file' if job.kind == 'velo' else 'OVA'} to {directory.name}/{job.filename}", percent=0)
         skip_tls = job.options.get("skip_download_tls_verification", True)
         job.emit("Download certificate verification: " + ("disabled" if skip_tls else "enabled"))
         try:
@@ -351,7 +361,7 @@ class Jobs:
                 except ValueError:
                     total = 0
                 if total > self.max_download_bytes:
-                    raise InputError("OVA exceeds the configured download size limit.")
+                    raise InputError("File exceeds the configured download size limit.")
                 received, last_update, last_percent = 0, 0, -1
                 fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 with os.fdopen(fd, "wb") as stream:
@@ -359,7 +369,7 @@ class Jobs:
                         if not chunk:
                             continue
                         if received + len(chunk) > self.max_download_bytes:
-                            raise InputError("OVA exceeds the configured download size limit.")
+                            raise InputError("File exceeds the configured download size limit.")
                         if shutil.disk_usage(directory).free < len(chunk) + 1024**3:
                             raise InputError("Download stopped to preserve 1 GiB of free disk space.")
                         stream.write(chunk)
@@ -398,7 +408,13 @@ class Jobs:
 
     def run(self, job):
         try:
-            path = self.download(job) if job.kind == "deployment" else None
+            path = self.download(job) if job.kind in ("deployment", "velo") else None
+            if job.kind == "velo":
+                if not job.options["download_only"]:
+                    transfer_velo(self.root, job, path)
+                job.emit("Velo download completed." if job.options["download_only"] else "Velo action completed.", phase="done", percent=100)
+                job.finish(True)
+                return
             if job.kind == "deployment" and job.options.get("download_only"):
                 job.emit("Download complete. The OVA is saved in your library and ready for deployment.", phase="done", percent=100)
                 job.finish(True)
@@ -460,7 +476,7 @@ class Jobs:
             job.emit(completed[job.kind], phase="done", percent=100)
             job.finish(True)
         except Exception as exc:
-            message = str(exc) if isinstance(exc, InputError) else "Operation failed. Check file permissions, disk space, and ESXi connectivity."
+            message = str(exc) if isinstance(exc, (InputError, VeloError)) else "Operation failed. Check file permissions, disk space, and ESXi connectivity."
             job.emit("ERROR: " + message)
             job.finish(False)
 
@@ -562,6 +578,15 @@ def create_app(root=None):
             return jsonify(filename=filename, interfaces=[dict(index=i+1, label=label, ge6=i == ge6) for i, label in enumerate(labels)])
         except Exception:
             raise InputError("Cannot read interfaces from this OVA. Check that it contains a valid single-VM OVF descriptor.") from None
+
+    @app.get("/api/velo/downloads")
+    def velo_downloads():
+        return jsonify(files=jobs.downloads("velo"))
+
+    @app.post("/api/velo/downloads/delete")
+    def delete_velo_download():
+        jobs.delete_download(body().get("filename"), "velo")
+        return jsonify(deleted=True)
 
     @app.get("/api/downloads")
     def downloads():

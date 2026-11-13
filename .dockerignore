@@ -25,3 +25,6 @@ OVA-download
 *.iso
 *.vmdk
 .ssh/
+
+Velo-download/
+velo_known_hosts

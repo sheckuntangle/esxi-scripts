@@ -109,3 +109,46 @@ an exploitable defect or silently suppressing them.
   testing networks. Connecting VM adapters can expose guests to their selected
   port groups. Cloning automatically shuts down the source VM and may force
   power-off if graceful shutdown fails.
+
+## Velo OpenWrt workflow (2026-11-13)
+
+Velo actions can upload a file and run `/root/swupdater` using root credentials.
+Anyone with GUI access can submit device credentials and perform these actions.
+The password is submitted to the GUI, kept in the job's memory, redacted from job
+output, and not saved to disk. An HTTP GUI connection does not protect the
+password in transit; use HTTPS or an SSH tunnel on untrusted networks.
+
+Unknown device host keys are automatically trusted on first use by explicit user
+request. A first-connection attacker could impersonate an edge and receive its
+password or update file. Recorded changed keys are rejected. `velo_known_hosts`
+is mode 0600, persisted outside the image, and ignored by Git. This does not weaken
+ESXi host-key verification. Legacy SSH algorithms are not automatically enabled.
+
+File names are restricted to plain names, and every remote command argument is
+shell-quoted. SCP writes into a new mode-0700 staging directory under `/tmp`,
+preventing a predictable filename from following a preexisting staging symlink.
+The completed file replaces `/tmp/NAME` after its byte count is checked. Device
+commands use BusyBox-compatible forms; preflight checks include root access,
+updater availability, SCP support, and RAM-backed `/tmp` capacity. The arbitrary
+shell command is not configurable through the GUI: the updater path is fixed.
+The file itself is trusted operator input; firmware signatures, hardware/image
+compatibility, and post-reboot health are not independently checked.
+
+The Velo library uses the same path, symlink, no-overwrite, partial-download
+cleanup, download limits, and active-file deletion protections as the OVA
+library. The libraries are independent, while all mutations share one job lock.
+Updater connection loss never counts as confirmed success or triggers a retry.
+Tests use simulated device operations; device firmware behavior requires actual
+edge validation by the operator.
+
+Static scanning flags `AutoAddPolicy` (Bandit B507) as high severity. This is an
+intentional, documented exception to implement the requested automatic acceptance
+of unknown Velo keys. It does not bypass checks for a changed recorded key.
+Remote command execution flags (B601) were reviewed for per-argument quoting;
+`/tmp` flags (B108) correspond to the requested destination and private staging.
+
+Velo verification: 108 unit/regression tests pass locally. Browser fixture checks
+cover the three tabs, tracked downloads, transfer/update output, optional updater,
+reconnect, shared job locks, deletion, and desktop/mobile layout. The rebuilt
+image dependency audit reports no known Python package vulnerabilities as of
+2026-11-13. These checks do not verify a real edge update or OpenWrt firmware.

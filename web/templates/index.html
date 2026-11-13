@@ -14,6 +14,7 @@
     <nav class="workspace-tabs" role="tablist" aria-label="Workspace sections">
       <button id="tab-deployment" class="nav-active" role="tab" aria-selected="true" aria-controls="deployment-panel" type="button"><span class="nav-icon" aria-hidden="true">↗</span> Deployment <span class="nav-dot" aria-hidden="true"></span></button>
       <button id="tab-misc" role="tab" aria-selected="false" aria-controls="misc-panel" tabindex="-1" type="button"><span class="nav-icon" aria-hidden="true">⌘</span> Misc ESXi Actions</button>
+      <button id="tab-velo" role="tab" aria-selected="false" aria-controls="velo-panel" tabindex="-1" type="button"><span class="nav-icon" aria-hidden="true">⇧</span> Velo Actions</button>
     </nav>
     <div class="sidebar-note"><span class="status-dot"></span> Local workspace<p>Deploy appliances.<br>Keep control of your lab.</p></div>
     <div class="sidebar-footer">ESXi scripts<span>Docker workspace</span></div>
@@ -24,7 +25,7 @@
     <div class="page">
       <div class="page-heading"><div><p id="page-eyebrow" class="eyebrow">DEPLOY & CONFIGURE</p><h1 id="page-title">Velo OVA deployment tool for testing</h1><p id="page-subtitle" class="subtitle">Download appliances to your library, then deploy them to your ESXi host.</p></div><span id="page-tag" class="version-tag">OVA WORKFLOW</span></div>
 
-      <section class="connection card" aria-labelledby="connection-heading">
+      <section id="esxi-connection" class="connection card" aria-labelledby="connection-heading">
         <div class="section-heading"><div class="heading-icon">⌁</div><div><h2 id="connection-heading">ESXi connection</h2><p>Saved locally and available after a restart.</p></div><span id="connection-status" class="pill">Not configured</span></div>
         <form id="connection-form">
           <div class="connection-fields">
@@ -122,6 +123,46 @@
           <div class="console-toolbar"><span><span class="status-dot" id="misc-console-dot"></span> ACTIVITY LOG</span><button id="misc-copy-output" type="button">Copy output</button></div>
           <div class="console-wrap"><div id="misc-console-empty" class="console-empty"><span>›_</span><strong>Your next lab action starts here.</strong><p>Progress and script output will appear in real time.<br>You can keep this page open or return while it runs.</p></div><pre id="misc-console" class="console-log" aria-label="ESXi actions log" tabindex="0"></pre></div>
           <div class="output-footer"><span>●</span> Uses the saved ESXi connection. One action runs at a time.</div>
+        </section>
+        </div>
+      </div>
+      <div id="velo-panel" role="tabpanel" aria-labelledby="tab-velo" hidden>
+        <div class="velo-note card"><strong>Root account setup required</strong><p>For Velo edges running OpenWrt/Dropbear. This assumes root SSH login is configured with a password. The vcadmin user cannot perform this workflow by default. Unknown SSH host keys are accepted and saved automatically; a changed key stops the connection. The edge must support SCP; /tmp is usually RAM-backed and its free space is checked before upload.</p></div>
+        <section class="library card" aria-labelledby="velo-library-heading">
+          <div class="section-heading"><div class="heading-icon">▤</div><div><h2 id="velo-library-heading">Downloaded Velo files</h2><p>Download update files, then select one to send to a device.</p></div><span id="velo-library-count" class="pill">0 files</span><button id="velo-refresh-library" class="button secondary" type="button">Refresh</button></div>
+          <form id="velo-download-form"><fieldset id="velo-download-fields">
+            <div class="download-fields">
+              <label>Download URL <span class="required">*</span><input id="velo-url" type="url" required placeholder="https://example.com/velo-update.tar.gz" autocomplete="off"></label>
+              <label>Save file as <span class="optional">optional</span><input id="velo-filename" maxlength="180" placeholder="Use the name from the link"><span class="field-help">Saved in Velo-download/</span></label>
+              <button id="velo-download-button" class="button primary" type="submit">Download file</button>
+            </div>
+            <label class="check"><input id="velo-skip-tls" type="checkbox" checked><span>Skip download certificate verification</span></label>
+            <label class="check"><input id="velo-reuse" type="checkbox" checked><span>Reuse this file if already downloaded</span></label>
+            <p id="velo-download-message" class="message error" role="alert"></p>
+          </fieldset></form>
+          <p id="velo-library-message" class="message" role="status"></p>
+          <div id="velo-library-scroll" class="library-scroll"><table class="library-table"><thead><tr><th>File name</th><th>Size</th><th>Saved</th><th>Actions</th></tr></thead><tbody id="velo-library-files"></tbody></table></div>
+          <p id="velo-library-empty" class="library-empty">No downloaded Velo files yet.</p>
+        </section>
+        <div class="workspace-grid misc-grid">
+          <section class="deployment card" aria-labelledby="velo-transfer-heading">
+            <div class="section-heading"><div class="heading-icon">⇧</div><div><h2 id="velo-transfer-heading">Upload to Velo</h2><p>Copy a saved file to /tmp and optionally run the updater.</p></div></div>
+            <form id="velo-transfer-form"><fieldset id="velo-transfer-fields">
+              <label>Saved file <span class="required">*</span><select id="velo-saved-file" required><option value="">Select a downloaded file</option></select></label>
+              <label>Velo IP address or hostname <span class="required">*</span><input id="velo-host" required placeholder="10.247.111.215" autocomplete="off"></label>
+              <label>Username <span class="required">*</span><input id="velo-user" required value="root" autocomplete="section-velo username"></label>
+              <label>Password <span class="required">*</span><input id="velo-password" required type="password" autocomplete="section-velo current-password"><span class="field-help">Used for this job only; not saved to creds.json.</span></label>
+              <label class="check"><input id="velo-run-update" type="checkbox" checked><span>Run /root/swupdater after the upload (may restart the device)</span></label>
+              <p id="velo-transfer-message" class="message error" role="alert"></p>
+              <button id="velo-transfer-button" class="button primary" type="submit">Upload &amp; update</button>
+            </fieldset></form>
+          </section>
+        <section class="output card" aria-labelledby="velo-output-heading">
+          <div class="section-heading"><div class="heading-icon terminal-icon">›_</div><div><h2 id="velo-output-heading">Live output</h2><p id="velo-job-caption">Follow downloads, SCP transfers, and updater output.</p></div><span id="velo-job-status" class="pill">Ready</span></div>
+          <div class="progress-area"><div class="progress-label"><span id="velo-phase-label">Waiting for an action</span><strong id="velo-progress-label">—</strong></div><progress id="velo-job-progress" value="0" max="100" aria-label="Current action progress"></progress><div class="stage-labels"><span id="velo-stage-download">01 <b>Download</b></span><span id="velo-stage-transfer">02 <b>SCP</b></span><span id="velo-stage-update">03 <b>Update</b></span><span id="velo-stage-done">04 <b>Complete</b></span></div></div>
+          <div class="console-toolbar"><span><span class="status-dot" id="velo-console-dot"></span> ACTIVITY LOG</span><button id="velo-copy-output" type="button">Copy output</button></div>
+          <div class="console-wrap"><div id="velo-console-empty" class="console-empty"><span>›_</span><strong>Your next Velo action starts here.</strong><p>Progress and script output will appear in real time.<br>You can keep this page open or return while it runs.</p></div><pre id="velo-console" class="console-log" aria-label="Velo actions log" tabindex="0"></pre></div>
+          <div class="output-footer"><span>●</span> Device passwords are used only for this job. One action runs at a time.</div>
         </section>
         </div>
       </div>

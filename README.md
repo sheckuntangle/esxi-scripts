@@ -32,7 +32,7 @@ or select a file in the deployment form's **Saved OVA** dropdown, and enter the
 new VM name. **Deploy an appliance** accepts only previously downloaded OVAs.
 Downloading and deploying are separate actions. Both show progress and output
 in the live output window, and you can return to a running action after refreshing
-the browser. Only one action runs at a time across both tabs.
+the browser. Only one action runs at a time across all tabs.
 
 Expand **Deployment options** for datastore, ISO folder, and optional GE6 NIC
 position. The GUI automatically accepts self-signed ESXi certificates.
@@ -89,7 +89,7 @@ output window. The **Misc ESXi Actions** tab adds:
   policies inherit.
 
 Both actions use the shared connection and show live script output on the Misc
-tab. One action runs at a time across both tabs; changing tabs or refreshing
+tab. One action runs at a time across all tabs; changing tabs or refreshing
 does not stop it. These two actions require ESXi SSH access. Docker mounts your
 `~/.ssh/known_hosts` read-only, so trusted host keys are shared without mounting
 private SSH keys. Set `HOST_KNOWN_HOSTS=/path/to/known_hosts` if stored elsewhere.
@@ -165,6 +165,61 @@ python3 -m unittest discover -s tests -v
 
 Use one web worker: its background job and live log are shared between threads
 within that process.
+
+
+## Velo Actions (OpenWrt edges)
+
+The **Velo Actions** tab targets Velo edges running OpenWrt/Dropbear. Configure
+root SSH password login on the edge first; `vcadmin` cannot run the updater by
+default. The GUI does not enable root access or change the edge's SSH configuration.
+
+1. Enter a file URL and optional save-as name under **Downloaded Velo files**.
+   Downloaded files persist in `Velo-download/` and can be selected or deleted
+   from the library, independently of the OVA library. Reuse and skip-download-
+   certificate-verification checkboxes are checked by default, like OVA downloads.
+2. Select a saved file, enter the edge IP/hostname, username (default `root`), and
+   password. Device credentials are separate from ESXi credentials, used for the
+   current job only, and never written to `creds.json` or returned by the API.
+3. Leave **Run /root/swupdater after the upload** checked to update, or uncheck
+   it for a file transfer only. Click **Upload & update** or **Upload to /tmp**.
+
+Transfers use the legacy SCP protocol over SSH port 22, so an SFTP subsystem is
+not required. The edge must have an SCP receiver in its SSH command path. The
+workflow checks root access and updater availability when updating, verifies SCP
+support and available `/tmp` space, then uploads into a private staging directory.
+It checks the received byte count and moves the completed file to `/tmp/NAME`.
+An existing file with that name is replaced. The updater runs as the connected
+root user from `/tmp`:
+
+```sh
+cd /tmp && /root/swupdater 'NAME'
+```
+
+The updater must support noninteractive SSH execution. This runs the
+Velo-specific updater supplied by your firmware; it does not run
+OpenWrt `sysupgrade` directly or validate whether an image is appropriate for a
+particular edge. Use files supported by that edge's updater. `/tmp` is usually
+RAM-backed on OpenWrt: the tool requires the file size plus a 16 MiB reserve
+before starting SCP. The updater may need additional space. Files in `/tmp`
+usually disappear on reboot.
+
+Download progress, SCP percentage, SSH banners, updater stdout/stderr, and
+failures appear in the Velo live output window. A zero updater exit status is
+reported as completion of the command, not independent verification of the new
+software version. If SSH disconnects during an update/reboot without an exit
+status, the job reports an error with an unconfirmed result. Inspect the edge's
+version and health before retrying; updates are never automatically retried.
+No successful update has been validated on a real edge by the automated tests.
+
+Unknown Velo SSH host keys are accepted automatically and recorded in the
+persistent, owner-only `velo_known_hosts` file. Previously known changed keys
+are rejected. Verify a changed fingerprint out of band before correcting that
+file. This trust-on-first-use policy applies only to Velo actions; ESXi SSH host
+key verification is unchanged. Device connections require SSH/SCP access from
+the Docker server. Downloads use the same size/free-space limits as the OVA
+library. Downloads and device actions share the single-job lock with ESXi actions.
+`Velo-download/` and `velo_known_hosts` are excluded from Git and Docker images.
+
 
 ## Command-line scripts
 

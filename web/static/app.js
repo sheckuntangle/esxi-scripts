@@ -153,27 +153,28 @@ async function refreshVms() {
   }
 }
 
+const workspaceTabs = ['deployment', 'misc', 'velo'];
 function setTab(tab) {
-  const misc = tab === 'misc';
-  $('deployment-panel').hidden = misc;
-  $('misc-panel').hidden = !misc;
-  for (const name of ['deployment', 'misc']) {
+  for (const name of workspaceTabs) {
     const selected = name === tab;
+    $(`${name}-panel`).hidden = !selected;
     $(`tab-${name}`).classList.toggle('nav-active', selected);
     $(`tab-${name}`).setAttribute('aria-selected', selected);
     $(`tab-${name}`).tabIndex = selected ? 0 : -1;
   }
-  $('breadcrumb').textContent = misc ? 'Misc ESXi Actions' : 'Deployment';
-  $('page-title').textContent = misc ? 'Misc ESXi Actions' : 'Velo OVA deployment tool for testing';
-  $('page-subtitle').textContent = misc ? 'Clone VMs and create internal networks with the same saved connection.' : 'Download appliances to your library, then deploy them to your ESXi host.';
-  $('page-eyebrow').textContent = misc ? 'MANAGE YOUR LAB' : 'DEPLOY & CONFIGURE';
-  $('page-tag').textContent = misc ? 'ESXi ACTIONS' : 'OVA WORKFLOW';
+  $('esxi-connection').hidden = tab === 'velo';
+  const titles = {deployment:'Deployment',misc:'Misc ESXi Actions',velo:'Velo Actions'};
+  $('breadcrumb').textContent = titles[tab];
+  $('page-title').textContent = tab === 'deployment' ? 'Velo OVA deployment tool for testing' : titles[tab];
+  $('page-subtitle').textContent = {deployment:'Download appliances to your library, then deploy them to your ESXi host.',misc:'Clone VMs and create internal networks with the same saved connection.',velo:'Download software, copy it to a Velo device, and follow its update.'}[tab];
+  $('page-eyebrow').textContent = {deployment:'DEPLOY & CONFIGURE',misc:'MANAGE YOUR LAB',velo:'VELO DEVICE TOOLS'}[tab];
+  $('page-tag').textContent = {deployment:'OVA WORKFLOW',misc:'ESXi ACTIONS',velo:'TRANSFER & UPDATE'}[tab];
   history.replaceState(null, '', `#${tab}`);
-  if (misc && !vmConnection && $('host').value.trim() && $('user').value.trim()) refreshVms();
+  if (tab === 'misc' && !vmConnection && $('host').value.trim() && $('user').value.trim()) refreshVms();
 }
 
 function output(id, job = currentJob) {
-  return $(`${job && job.kind && job.kind !== 'deployment' ? 'misc-' : ''}${id}`);
+  return $(`${job?.kind === 'velo' ? 'velo-' : job && job.kind && job.kind !== 'deployment' ? 'misc-' : ''}${id}`);
 }
 
 
@@ -286,6 +287,7 @@ async function saveConnection() {
 
 function setBusy(value) {
   busy = value;
+  veloBusy(value);
   $('deployment-fields').disabled = value;
   $('download-fields').disabled = value;
   $('download-button').textContent = value ? 'Action in progress' : 'Download OVA';
@@ -307,10 +309,12 @@ function jobState(job) {
   output('job-status', job).className = `pill ${job.status}`;
   output('job-caption', job).textContent = job.name;
   const phase = job.phase;
-  output('phase-label', job).textContent = job.status === 'failed' ? 'Stopped · review the output below' : ({ download: 'Downloading OVA', deploy: 'Deploying to ESXi', clone: 'Cloning VM', network: 'Creating internal network', done: 'Action complete' })[phase];
+  output('phase-label', job).textContent = job.status === 'failed' ? 'Stopped · review the output below' : ({ download: job.kind === 'velo' ? 'Downloading Velo file' : 'Downloading OVA', deploy: 'Deploying to ESXi', clone: 'Cloning VM', network: 'Creating internal network', transfer: 'Uploading to Velo /tmp', update: 'Running swupdater', done: 'Action complete' })[phase];
   output('job-progress', job).value = job.percent || 0;
   output('progress-label', job).textContent = `${job.percent || 0}%`;
-  if (!job.kind || job.kind === 'deployment') {
+  if (job.kind === 'velo') {
+    for (const stage of ['download','transfer','update','done']) $(`velo-stage-${stage}`).classList.toggle('active', stage === phase);
+  } else if (!job.kind || job.kind === 'deployment') {
     ['download', 'deploy', 'done'].forEach((stage) => { $(`stage-${stage}`).className = phase === stage ? 'active' : ''; });
   } else {
     ['start', 'action', 'done'].forEach((stage) => { $(`misc-stage-${stage}`).className = (phase === 'done' ? stage === 'done' : stage === 'action') ? 'active' : ''; });
@@ -337,6 +341,11 @@ function follow(job, clear = false) {
     const selectDownload = setupDownload && currentJob.status === 'success';
     setupDownload = false;
     await refreshLibrary();
+    await refreshVeloLibrary();
+    if (veloDownloadSelection && currentJob.kind === 'velo') {
+      if (currentJob.status === 'success') $('velo-saved-file').value = currentJob.filename;
+      veloDownloadSelection = false;
+    }
     if (selectDownload) {
       clearInterfaces();
       $('saved-file').value = currentJob.filename;
@@ -382,7 +391,7 @@ $('deploy-form').addEventListener('submit', async (event) => {
   } catch (error) { $('deploy-message').textContent = error.message; setBusy(false); }
 });
 
-for (const prefix of ['', 'misc-']) {
+for (const prefix of ['', 'misc-', 'velo-']) {
   $(`${prefix}copy-output`).addEventListener('click', async () => {
     const button = $(`${prefix}copy-output`);
     try { await navigator.clipboard.writeText($(`${prefix}console`).textContent); button.textContent = 'Copied'; }
@@ -418,6 +427,79 @@ $('network-form').addEventListener('submit', (event) => {
   runMisc('network', { name: $('network-name').value });
 });
 
+let veloFiles = [];
+let veloDownloadSelection = false;
+
+function veloBusy(value) {
+  $('velo-download-fields').disabled = value;
+  $('velo-transfer-fields').disabled = value;
+  $('velo-download-button').textContent = value ? 'Action in progress' : 'Download file';
+  $('velo-transfer-button').textContent = value ? 'Action in progress' : $('velo-run-update').checked ? 'Upload & update' : 'Upload to /tmp';
+  document.querySelectorAll('[data-kind="velo-use"]').forEach(button => { button.disabled = value; });
+}
+
+async function refreshVeloLibrary() {
+  try {
+    const data = await api('/api/velo/downloads');
+    veloFiles = data.files;
+    const selected = $('velo-saved-file').value;
+    $('velo-saved-file').replaceChildren(new Option('Select a downloaded file', ''));
+    $('velo-library-files').replaceChildren();
+    for (const file of data.files) {
+      $('velo-saved-file').add(new Option(file.name, file.name));
+      const row = document.createElement('tr');
+      const name = document.createElement('td'); name.className = 'file-name'; name.textContent = file.name + (file.in_use ? ' · In use' : '');
+      const size = document.createElement('td'); size.textContent = fileSize(file.size);
+      const date = document.createElement('td'); date.textContent = new Date(file.modified).toLocaleString();
+      const actions = document.createElement('td'); actions.className = 'file-actions';
+      const use = document.createElement('button'); use.type = 'button'; use.className = 'file-use'; use.dataset.kind = 'velo-use'; use.textContent = 'Use for upload';
+      use.addEventListener('click', () => {
+        if (busy) return;
+        $('velo-saved-file').value = file.name;
+        $('velo-transfer-heading').scrollIntoView({behavior:'smooth', block:'start'});
+        $('velo-host').focus({preventScroll:true});
+      });
+      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'file-delete'; remove.textContent = 'Delete'; remove.disabled = file.in_use;
+      remove.addEventListener('click', async () => {
+        if (!window.confirm(`Delete "${file.name}" from Velo-download? Files already on a device are unchanged.`)) return;
+        remove.disabled = true;
+        try {
+          await api('/api/velo/downloads/delete', {method:'POST', body:JSON.stringify({filename:file.name})});
+          $('velo-library-message').textContent = `Deleted ${file.name}.`;
+        } catch (error) { $('velo-library-message').textContent = error.message; }
+        await refreshVeloLibrary();
+      });
+      actions.append(use, remove); row.append(name,size,date,actions); $('velo-library-files').append(row);
+    }
+    if (data.files.some(file => file.name === selected)) $('velo-saved-file').value = selected;
+    $('velo-library-count').textContent = `${data.files.length} files · ${fileSize(data.files.reduce((total,file) => total+file.size,0))}`;
+    $('velo-library-empty').hidden = data.files.length > 0;
+    $('velo-library-scroll').hidden = data.files.length === 0;
+    veloBusy(busy);
+  } catch (error) { $('velo-library-message').textContent = error.message; }
+}
+
+$('velo-refresh-library').addEventListener('click', refreshVeloLibrary);
+$('velo-run-update').addEventListener('change', () => veloBusy(busy));
+$('velo-download-form').addEventListener('submit', async event => {
+  event.preventDefault(); if (busy) return;
+  $('velo-download-message').textContent = ''; setBusy(true);
+  try {
+    const data = await api('/api/jobs', {method:'POST', body:JSON.stringify({kind:'velo', download_only:true, url:$('velo-url').value, filename:$('velo-filename').value, reuse_existing:$('velo-reuse').checked, skip_download_tls_verification:$('velo-skip-tls').checked})});
+    veloDownloadSelection = true; follow(data.job,true); refreshVeloLibrary();
+  } catch (error) { $('velo-download-message').textContent = error.message; setBusy(false); }
+});
+$('velo-transfer-form').addEventListener('submit', async event => {
+  event.preventDefault(); if (busy) return;
+  $('velo-transfer-message').textContent = ''; setBusy(true);
+  try {
+    const data = await api('/api/jobs', {method:'POST', body:JSON.stringify({kind:'velo',filename:$('velo-saved-file').value,host:$('velo-host').value,user:$('velo-user').value,password:$('velo-password').value,run_update:$('velo-run-update').checked})});
+    $('velo-password').value = '';
+    follow(data.job,true); refreshVeloLibrary();
+  } catch (error) { $('velo-transfer-message').textContent = error.message; setBusy(false); }
+});
+
+
 async function initialize() {
   try {
     const data = await api('/api/connection');
@@ -433,18 +515,18 @@ async function initialize() {
 $('refresh-library').addEventListener('click', refreshLibrary);
 $('refresh-vms').addEventListener('click', refreshVms);
 for (const field of ['host', 'user']) $(field).addEventListener('input', invalidateVms);
-for (const tab of ['deployment', 'misc']) {
+for (const tab of workspaceTabs) {
   $(`tab-${tab}`).addEventListener('click', () => setTab(tab));
   $(`tab-${tab}`).addEventListener('keydown', (event) => {
     if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
       event.preventDefault();
-      const next = event.key === 'Home' ? 'deployment' : event.key === 'End' ? 'misc' : tab === 'deployment' ? 'misc' : 'deployment';
+      const next = event.key === 'Home' ? workspaceTabs[0] : event.key === 'End' ? workspaceTabs.at(-1) : workspaceTabs[(workspaceTabs.indexOf(tab) + (event.key === 'ArrowLeft' ? 2 : 1)) % workspaceTabs.length];
       setTab(next);
       $(`tab-${next}`).focus();
     }
   });
 }
-setTab(location.hash === '#misc' ? 'misc' : 'deployment');
+setTab(workspaceTabs.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'deployment');
 setInterval(refreshLibrary, 5000);
 initialize();
 
@@ -464,3 +546,6 @@ $('download-form').addEventListener('submit', async (event) => {
 
 $('clone-source').addEventListener('change', refreshCloneInterfaces);
 $('refresh-clone-interfaces').addEventListener('click', refreshCloneInterfaces);
+
+refreshVeloLibrary();
+setInterval(refreshVeloLibrary,5000);
