@@ -180,7 +180,14 @@ default. The GUI does not enable root access or change the edge's SSH configurat
 2. Enter the edge IP/hostname, username (default `root`), and password under
    **Velo device connection**. These fields are shared by both device actions.
    Credentials are separate from ESXi credentials and never saved to `creds.json`.
-   Re-enter the password for each action; it is cleared after a job is accepted.
+   The password stays filled in for subsequent actions until cleared or the page
+   is reloaded. Use **Show password** / **Hide password** to toggle visibility.
+   The connection section appears first in the Velo tab.
+   Under **Activate Velo edge**, enter a VCO hostname/IP and activation key, then
+   click **Activate device** to run `/opt/vc/bin/activate.py -i -f -s VCO KEY`.
+   Activation is independent of uploads and updates and uses the shared device
+   connection. Activation keys are excluded from API responses and redacted
+   from logs. Verify the resulting activation status in the VCO.
 3. Under **SCP upload**, select a saved file and click **Upload to /tmp**.
    Uploading only copies the file and never starts the updater.
 4. Separately, under **Run swupdater**, enter the name of a file already in the

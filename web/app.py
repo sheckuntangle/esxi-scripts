@@ -20,7 +20,7 @@ from flask import Flask, Response, jsonify, render_template, request, stream_wit
 import requests
 import paramiko
 
-from web.velo import FILE_NAME as VELO_FILENAME, VeloError, velo_input, transfer as transfer_velo, run_update as update_velo
+from web.velo import FILE_NAME as VELO_FILENAME, VeloError, velo_input, transfer as transfer_velo, run_update as update_velo, activate as activate_velo
 
 from clone_vm import CloneError, inventory, load_ssh_host_keys, config_field, datastore_path, read_vmx, remote, vmx_interfaces, validate_nic_mappings
 from deploy_ova import ova_descriptor, interface_labels, objects, SmartConnect, Disconnect, vim
@@ -244,9 +244,10 @@ class Job:
 
     def emit(self, text, phase=None, percent=None):
         # Never return saved passwords, including accidental subprocess output.
-        password = self.credentials.get("password", "")
-        if password:
-            text = text.replace(password, "[redacted]")
+        for field in ("password", "activation_key"):
+            secret = self.credentials.get(field, "")
+            if secret:
+                text = text.replace(secret, "[redacted]")
         with self.condition:
             if phase:
                 self.phase = phase
@@ -279,7 +280,7 @@ class Jobs:
 
     def in_use(self, filename, kind="deployment"):
         return bool(self.current and self.current.status == "running" and self.current.filename == filename
-                    and self.current.kind == kind and self.current.options.get("operation") != "update")
+                    and self.current.kind == kind and self.current.options.get("operation") not in ("update", "activate"))
 
     def downloads(self, kind="deployment"):
         result = []
@@ -320,7 +321,7 @@ class Jobs:
             if options["kind"] == "clone" and options["source_vm_id"]:
                 if options["source_host"] != credentials["host"] or options["source_user"] != credentials["user"]:
                     raise InputError("The ESXi connection changed. Refresh the source VM list and select a VM again.")
-            if options["kind"] in ("deployment", "velo") and options.get("operation") != "update":
+            if options["kind"] in ("deployment", "velo") and options.get("operation") not in ("update", "activate"):
                 if options.get("nic_mappings") and (options["network_host"] != credentials["host"] or options["network_user"] != credentials["user"]):
                     raise InputError("The ESXi connection changed. Reload the network list before deploying.")
                 path = download_directory(self.root, options["kind"]) / options["filename"]
@@ -408,9 +409,11 @@ class Jobs:
 
     def run(self, job):
         try:
-            path = self.download(job) if job.kind in ("deployment", "velo") and job.options.get("operation") != "update" else None
+            path = self.download(job) if job.kind in ("deployment", "velo") and job.options.get("operation") not in ("update", "activate") else None
             if job.kind == "velo":
-                if job.options["operation"] == "update":
+                if job.options["operation"] == "activate":
+                    activate_velo(self.root, job)
+                elif job.options["operation"] == "update":
                     update_velo(self.root, job)
                 elif not job.options["download_only"]:
                     transfer_velo(self.root, job, path)

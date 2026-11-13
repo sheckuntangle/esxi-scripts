@@ -309,11 +309,11 @@ function jobState(job) {
   output('job-status', job).className = `pill ${job.status}`;
   output('job-caption', job).textContent = job.name;
   const phase = job.phase;
-  output('phase-label', job).textContent = job.status === 'failed' ? 'Stopped · review the output below' : ({ download: job.kind === 'velo' ? 'Downloading Velo file' : 'Downloading OVA', deploy: 'Deploying to ESXi', clone: 'Cloning VM', network: 'Creating internal network', transfer: 'Uploading to Velo /tmp', update: 'Running swupdater', done: 'Action complete' })[phase];
+  output('phase-label', job).textContent = job.status === 'failed' ? 'Stopped · review the output below' : ({ download: job.kind === 'velo' ? 'Downloading Velo file' : 'Downloading OVA', deploy: 'Deploying to ESXi', clone: 'Cloning VM', network: 'Creating internal network', transfer: 'Uploading to Velo /tmp', update: 'Running swupdater', activate: 'Activating Velo edge', done: 'Action complete' })[phase];
   output('job-progress', job).value = job.percent || 0;
   output('progress-label', job).textContent = `${job.percent || 0}%`;
   if (job.kind === 'velo') {
-    for (const stage of ['download','transfer','update','done']) $(`velo-stage-${stage}`).classList.toggle('active', stage === phase);
+    for (const stage of ['activate','download','transfer','update','done']) $(`velo-stage-${stage}`).classList.toggle('active', stage === phase);
   } else if (!job.kind || job.kind === 'deployment') {
     ['download', 'deploy', 'done'].forEach((stage) => { $(`stage-${stage}`).className = phase === stage ? 'active' : ''; });
   } else {
@@ -435,6 +435,8 @@ function veloBusy(value) {
   $('velo-transfer-fields').disabled = value;
   $('velo-device-fields').disabled = value;
   $('velo-update-fields').disabled = value;
+  $('velo-activate-fields').disabled = value;
+  $('velo-activate-button').textContent = value ? 'Action in progress' : 'Activate device';
   $('velo-update-button').textContent = value ? 'Action in progress' : 'Run swupdater';
   $('velo-download-button').textContent = value ? 'Action in progress' : 'Download file';
   $('velo-transfer-button').textContent = value ? 'Action in progress' : 'Upload to /tmp';
@@ -483,6 +485,12 @@ async function refreshVeloLibrary() {
 }
 
 $('velo-refresh-library').addEventListener('click', refreshVeloLibrary);
+$('velo-show-password').addEventListener('click', () => {
+  const show = $('velo-password').type === 'password';
+  $('velo-password').type = show ? 'text' : 'password';
+  $('velo-show-password').textContent = show ? 'Hide password' : 'Show password';
+  $('velo-show-password').setAttribute('aria-pressed', String(show));
+});
 $('velo-device-form').addEventListener('submit', event => event.preventDefault());
 $('velo-download-form').addEventListener('submit', async event => {
   event.preventDefault(); if (busy) return;
@@ -492,14 +500,13 @@ $('velo-download-form').addEventListener('submit', async event => {
     veloDownloadSelection = true; follow(data.job,true); refreshVeloLibrary();
   } catch (error) { $('velo-download-message').textContent = error.message; setBusy(false); }
 });
-for (const operation of ['transfer', 'update']) {
+for (const operation of ['transfer', 'update', 'activate']) {
   $(`velo-${operation}-form`).addEventListener('submit', async event => {
     event.preventDefault(); if (busy || !$('velo-device-form').reportValidity()) return;
     const filename = operation === 'transfer' ? $('velo-saved-file').value : $('velo-update-filename').value;
     $(`velo-${operation}-message`).textContent = ''; setBusy(true);
     try {
-      const data = await api('/api/jobs', {method:'POST', body:JSON.stringify({kind:'velo',operation,filename,host:$('velo-host').value,user:$('velo-user').value,password:$('velo-password').value})});
-      $('velo-password').value = '';
+      const data = await api('/api/jobs', {method:'POST', body:JSON.stringify({kind:'velo',operation,filename,host:$('velo-host').value,user:$('velo-user').value,password:$('velo-password').value,...(operation === 'activate' ? {vco:$('velo-vco').value.trim(),activation_key:$('velo-activation-key').value.trim()} : {})})});
       follow(data.job,true); refreshVeloLibrary();
     } catch (error) { $(`velo-${operation}-message`).textContent = error.message; setBusy(false); }
   });

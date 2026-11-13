@@ -113,7 +113,11 @@ an exploitable defect or silently suppressing them.
 ## Velo OpenWrt workflow (2026-11-13)
 
 Velo uploads and `/root/swupdater` runs are separate, explicit actions. Uploads
-never start the updater. Only the updater action requires root credentials.
+never start the updater. The updater action requires root credentials. Activation separately runs the fixed
+`/opt/vc/bin/activate.py -i -f -s VCO KEY` command with validated, shell-quoted
+arguments. Activation keys stay in job memory, are excluded from API responses,
+and are redacted from output. Device passwords remain in the page until cleared
+or reloaded, with a show/hide control; they are not persisted in browser storage.
 Anyone with GUI access can submit device credentials and perform these actions.
 The password is submitted to the GUI, kept in the job's memory, redacted from job
 output, and not saved to disk. An HTTP GUI connection does not protect the
@@ -149,7 +153,7 @@ of unknown Velo keys. It does not bypass checks for a changed recorded key.
 Remote command execution flags (B601) were reviewed for per-argument quoting;
 `/tmp` flags (B108) correspond to the requested destination and private staging.
 
-Velo verification: 111 unit/regression tests pass locally. Browser fixture checks
+Velo verification: 114 unit/regression tests pass locally. Browser fixture checks
 cover the three tabs, tracked downloads, separate transfer/update output and actions,
 reconnect, shared job locks, deletion, and desktop/mobile layout. The rebuilt
 image dependency audit reports no known Python package vulnerabilities as of

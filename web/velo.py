@@ -3,6 +3,7 @@
 import codecs
 from contextlib import contextmanager
 import os
+import ipaddress
 from pathlib import Path
 import re
 import shlex
@@ -26,8 +27,8 @@ def velo_input(data):
         if key in data and type(data[key]) is not bool:
             raise ValueError(f'{key} must be true or false.')
     operation = data.get('operation', 'download' if download_only else 'transfer')
-    if operation not in ('download', 'transfer', 'update') or (download_only and operation != 'download'):
-        raise ValueError('Select a download, SCP upload, or updater action.')
+    if operation not in ('download', 'transfer', 'update', 'activate') or (download_only and operation != 'download'):
+        raise ValueError('Select a download, SCP upload, updater, or activation action.')
     download_only = operation == 'download'
     if data.get('run_update') is True:
         raise ValueError('SCP and swupdater are separate actions. Use the Run swupdater section.')
@@ -42,7 +43,9 @@ def velo_input(data):
         if not valid or len(url) > 8192:
             raise ValueError('Enter an HTTP or HTTPS download URL without embedded credentials.')
         filename = filename or unquote(parsed.path.rsplit('/', 1)[-1])
-    if not FILE_NAME.fullmatch(filename):
+    if operation == 'activate':
+        filename = ''
+    elif not FILE_NAME.fullmatch(filename):
         raise ValueError('Enter a plain file name using letters, digits, spaces, dots, underscores or hyphens.')
     credentials = {}
     if not download_only:
@@ -54,8 +57,22 @@ def velo_input(data):
         if not isinstance(password, str) or not password:
             raise ValueError('Enter the Velo device password.')
         credentials = dict(host=host.strip(), user=user.strip(), password=password)
-    return dict(kind='velo', name='Download ' + filename if download_only else ('Update on ' if operation == 'update' else 'Transfer to ') + credentials['host'],
-                filename=filename, source='url' if download_only else 'remote' if operation == 'update' else 'downloaded', url=url if download_only else '',
+    if operation == 'activate':
+        vco = data.get('vco', '')
+        key = data.get('activation_key', '')
+        valid_vco = isinstance(vco, str) and len(vco) <= 253
+        if valid_vco:
+            try:
+                ipaddress.ip_address(vco)
+            except ValueError:
+                valid_vco = all(re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?', label) for label in vco.rstrip('.').split('.'))
+        if not valid_vco:
+            raise ValueError('Enter a VCO hostname or IP address without a URL or port.')
+        if not isinstance(key, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,255}', key):
+            raise ValueError('Enter a valid activation key using letters, digits, underscores or hyphens.')
+        credentials.update(vco=vco, activation_key=key)
+    return dict(kind='velo', name='Download ' + filename if download_only else ({'update': 'Update on ', 'activate': 'Activation on '}.get(operation, 'Transfer to ')) + credentials['host'],
+                filename=filename, source='url' if download_only else 'remote' if operation in ('update', 'activate') else 'downloaded', url=url if download_only else '',
                 download_only=download_only, operation=operation,
                 reuse_existing=data.get('reuse_existing', True),
                 skip_download_tls_verification=data.get('skip_download_tls_verification', True),
@@ -145,9 +162,20 @@ def device_session(root, job, phase):
     except VeloError:
         raise
     except Exception:
-        raise VeloError('Velo transfer/update failed. Check SSH/SCP support, permissions, disk space, and device connectivity; inspect the device before retrying.') from None
+        raise VeloError('Velo device action failed. Check SSH/SCP support, permissions, disk space, and device connectivity; inspect the device before retrying.') from None
     finally:
         client.close()
+
+
+def activate(root, job):
+    with device_session(root, job, 'activate') as client:
+        job.emit('Checking activation script availability')
+        command(client, ['test', '-x', '/opt/vc/bin/activate.py'])
+        job.emit('Running device activation against VCO ' + job.credentials['vco'], phase='activate', percent=0)
+        command(client, ['/opt/vc/bin/activate.py', '-i', '-f', '-s',
+                         job.credentials['vco'], job.credentials['activation_key']],
+                emit=job.emit, timeout=600)
+        job.emit('Activation command exited successfully. Verify activation status in the VCO.')
 
 
 def run_update(root, job):

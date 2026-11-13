@@ -127,6 +127,23 @@
         </div>
       </div>
       <div id="velo-panel" role="tabpanel" aria-labelledby="tab-velo" hidden>
+          <section class="deployment card velo-top-card" aria-labelledby="velo-device-heading">
+            <div class="section-heading"><div class="heading-icon">⌘</div><div><h2 id="velo-device-heading">Velo device connection</h2><p>Used by activation, SCP, and swupdater.</p></div></div>
+            <form id="velo-device-form"><fieldset id="velo-device-fields">
+              <label>Velo IP address or hostname <span class="required">*</span><input id="velo-host" required placeholder="10.247.111.215" autocomplete="off"></label>
+              <label>Username <span class="required">*</span><input id="velo-user" required value="root" autocomplete="section-velo username"></label>
+              <label>Password <span class="required">*</span><input id="velo-password" required type="password" autocomplete="section-velo current-password"><button id="velo-show-password" class="button secondary" type="button" aria-controls="velo-password" aria-pressed="false">Show password</button><span class="field-help">Kept in this page until you clear it or reload; not saved to creds.json.</span></label>
+            </fieldset></form>
+          </section>
+        <section class="deployment card velo-top-card" aria-labelledby="velo-activate-heading">
+          <div class="section-heading"><div class="heading-icon">↗</div><div><h2 id="velo-activate-heading">Activate Velo edge</h2><p>Activate this device against your VCO using the connection above.</p></div></div>
+          <form id="velo-activate-form"><fieldset id="velo-activate-fields">
+            <label>VCO hostname or IP address <span class="required">*</span><input id="velo-vco" required maxlength="253" placeholder="vco.example.com" autocomplete="off"></label>
+            <label>Activation key <span class="required">*</span><input id="velo-activation-key" required maxlength="256" autocomplete="off"></label>
+            <p id="velo-activate-message" class="message error" role="alert"></p>
+            <button id="velo-activate-button" class="button primary" type="submit">Activate device</button>
+          </fieldset></form>
+        </section>
         <div class="velo-note card"><strong>Root account setup required</strong><p>For Velo edges running OpenWrt/Dropbear. This assumes root SSH login is configured with a password. The vcadmin user cannot perform this workflow by default. Unknown SSH host keys are accepted and saved automatically; a changed key stops the connection. The edge must support SCP; /tmp is usually RAM-backed and its free space is checked before upload.</p></div>
         <section class="library card" aria-labelledby="velo-library-heading">
           <div class="section-heading"><div class="heading-icon">▤</div><div><h2 id="velo-library-heading">Downloaded Velo files</h2><p>Download update files, then select one to send to a device.</p></div><span id="velo-library-count" class="pill">0 files</span><button id="velo-refresh-library" class="button secondary" type="button">Refresh</button></div>
@@ -146,14 +163,6 @@
         </section>
         <div class="workspace-grid misc-grid">
           <div class="misc-forms">
-          <section class="deployment card" aria-labelledby="velo-device-heading">
-            <div class="section-heading"><div class="heading-icon">⌘</div><div><h2 id="velo-device-heading">Velo device connection</h2><p>Used by SCP and swupdater. Re-enter the password for each action.</p></div></div>
-            <form id="velo-device-form"><fieldset id="velo-device-fields">
-              <label>Velo IP address or hostname <span class="required">*</span><input id="velo-host" required placeholder="10.247.111.215" autocomplete="off"></label>
-              <label>Username <span class="required">*</span><input id="velo-user" required value="root" autocomplete="section-velo username"></label>
-              <label>Password <span class="required">*</span><input id="velo-password" required type="password" autocomplete="section-velo current-password"><span class="field-help">Used for this job only; not saved to creds.json.</span></label>
-            </fieldset></form>
-          </section>
           <section class="deployment card" aria-labelledby="velo-transfer-heading">
             <div class="section-heading"><div class="heading-icon">⇧</div><div><h2 id="velo-transfer-heading">SCP upload</h2><p>Copy a saved file to the edge's /tmp directory.</p></div></div>
             <form id="velo-transfer-form"><fieldset id="velo-transfer-fields">
@@ -172,11 +181,11 @@
           </section>
           </div>
         <section class="output card" aria-labelledby="velo-output-heading">
-          <div class="section-heading"><div class="heading-icon terminal-icon">›_</div><div><h2 id="velo-output-heading">Live output</h2><p id="velo-job-caption">Follow downloads, SCP transfers, and updater output.</p></div><span id="velo-job-status" class="pill">Ready</span></div>
-          <div class="progress-area"><div class="progress-label"><span id="velo-phase-label">Waiting for an action</span><strong id="velo-progress-label">—</strong></div><progress id="velo-job-progress" value="0" max="100" aria-label="Current action progress"></progress><div class="stage-labels"><span id="velo-stage-download">01 <b>Download</b></span><span id="velo-stage-transfer">02 <b>SCP</b></span><span id="velo-stage-update">03 <b>Update</b></span><span id="velo-stage-done">04 <b>Complete</b></span></div></div>
+          <div class="section-heading"><div class="heading-icon terminal-icon">›_</div><div><h2 id="velo-output-heading">Live output</h2><p id="velo-job-caption">Follow activation, downloads, SCP transfers, and updater output.</p></div><span id="velo-job-status" class="pill">Ready</span></div>
+          <div class="progress-area"><div class="progress-label"><span id="velo-phase-label">Waiting for an action</span><strong id="velo-progress-label">—</strong></div><progress id="velo-job-progress" value="0" max="100" aria-label="Current action progress"></progress><div class="stage-labels"><span id="velo-stage-activate"><b>Activate</b></span><span id="velo-stage-download">01 <b>Download</b></span><span id="velo-stage-transfer">02 <b>SCP</b></span><span id="velo-stage-update">03 <b>Update</b></span><span id="velo-stage-done">04 <b>Complete</b></span></div></div>
           <div class="console-toolbar"><span><span class="status-dot" id="velo-console-dot"></span> ACTIVITY LOG</span><button id="velo-copy-output" type="button">Copy output</button></div>
           <div class="console-wrap"><div id="velo-console-empty" class="console-empty"><span>›_</span><strong>Your next Velo action starts here.</strong><p>Progress and script output will appear in real time.<br>You can keep this page open or return while it runs.</p></div><pre id="velo-console" class="console-log" aria-label="Velo actions log" tabindex="0"></pre></div>
-          <div class="output-footer"><span>●</span> Device passwords are used only for this job. One action runs at a time.</div>
+          <div class="output-footer"><span>●</span> Device credentials are not saved to disk. One action runs at a time.</div>
         </section>
         </div>
       </div>

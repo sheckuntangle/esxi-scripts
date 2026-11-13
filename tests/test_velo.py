@@ -194,6 +194,40 @@ class VeloTests(unittest.TestCase):
             with self.assertRaises(velo.VeloError): velo.run_update(self.root,self.job(operation='update'))
             self.assertFalse(any(c.args[1][0]=='/root/swupdater' for c in command.call_args_list))
 
+    @patch('web.velo.command')
+    @patch('web.velo.paramiko.SSHClient')
+    def test_activation_uses_fixed_command_and_redacts_key(self, ssh, command):
+        ssh.return_value.get_transport.return_value.get_banner.return_value = b'Authorized Users Only'
+        job=self.job(operation='activate',vco='vco.example.com',activation_key='SECRET-KEY-123')
+        def respond(client,args,**kwargs):
+            if kwargs.get('emit'):kwargs['emit']('Activated SECRET-KEY-123 device-secret')
+            return ''
+        command.side_effect=respond
+        velo.activate(self.root,job)
+        self.assertEqual(command.call_args.args[1],['/opt/vc/bin/activate.py','-i','-f','-s','vco.example.com','SECRET-KEY-123'])
+        self.assertNotIn('activation_key',job.options)
+        self.assertNotIn('SECRET-KEY-123',json.dumps(job.summary())+json.dumps(job.lines))
+        self.assertNotIn('device-secret',json.dumps(job.lines))
+
+    def test_activation_validates_vco_and_key(self):
+        for vco,key in [('https://vco','KEY'),('vco:443','KEY'),('vco;reboot','KEY'),('vco',''),('vco','key;reboot')]:
+            with self.assertRaises(InputError):self.job(operation='activate',vco=vco,activation_key=key)
+        self.assertEqual(self.job(operation='activate',vco='2001:db8::1',activation_key='KEY').credentials['vco'],'2001:db8::1')
+
+    @patch('web.app.threading.Thread')
+    @patch('web.app.activate_velo')
+    @patch('web.app.requests.get')
+    @patch('web.app.transfer_velo')
+    def test_activation_route_needs_no_file_and_keeps_key_out_of_api(self, transfer, get, activate, thread):
+        response=self.client.post('/api/jobs',json=dict(kind='velo',operation='activate',host='edge',user='root',password='device-secret',vco='vco.example.com',activation_key='SECRET-KEY'))
+        self.assertEqual(response.status_code,202)
+        self.assertNotIn('SECRET-KEY',response.get_data(as_text=True))
+        jobs=self.client.application.extensions['jobs'];job=jobs.current
+        jobs.run(job)
+        activate.assert_called_once_with(self.root,job)
+        transfer.assert_not_called();get.assert_not_called()
+        self.assertEqual(job.status,'success')
+
     @patch('web.app.requests.get')
     @patch('web.app.transfer_velo')
     @patch('web.app.update_velo')
