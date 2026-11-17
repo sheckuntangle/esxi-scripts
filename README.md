@@ -182,7 +182,10 @@ default. The GUI does not enable root access or change the edge's SSH configurat
    Credentials are separate from ESXi credentials and never saved to `creds.json`.
    The password stays filled in for subsequent actions until cleared or the page
    is reloaded. Use **Show password** / **Hide password** to toggle visibility.
-   The connection section appears first in the Velo tab.
+   The connection section appears first in the Velo tab. Device credential fields
+   request that browsers disable autofill/password-manager handling. Chrome may
+   still show its own compromised-password warning; a website cannot reliably
+   suppress browser security notices.
    Under **Activate Velo edge**, enter a VCO hostname/IP and activation key, then
    click **Activate device** to run `/opt/vc/bin/activate.py -i -f -s VCO KEY`.
    Activation is independent of uploads and updates and uses the shared device

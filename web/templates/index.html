@@ -129,10 +129,10 @@
       <div id="velo-panel" role="tabpanel" aria-labelledby="tab-velo" hidden>
           <section class="deployment card velo-top-card" aria-labelledby="velo-device-heading">
             <div class="section-heading"><div class="heading-icon">⌘</div><div><h2 id="velo-device-heading">Velo device connection</h2><p>Used by activation, SCP, and swupdater.</p></div></div>
-            <form id="velo-device-form"><fieldset id="velo-device-fields">
+            <form id="velo-device-form" autocomplete="off"><fieldset id="velo-device-fields">
               <label>Velo IP address or hostname <span class="required">*</span><input id="velo-host" required placeholder="10.247.111.215" autocomplete="off"></label>
-              <label>Username <span class="required">*</span><input id="velo-user" required value="root" autocomplete="section-velo username"></label>
-              <label>Password <span class="required">*</span><input id="velo-password" required type="password" autocomplete="section-velo current-password"><button id="velo-show-password" class="button secondary" type="button" aria-controls="velo-password" aria-pressed="false">Show password</button><span class="field-help">Kept in this page until you clear it or reload; not saved to creds.json.</span></label>
+              <label>Username <span class="required">*</span><input id="velo-user" required value="root" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+              <label>Password <span class="required">*</span><input id="velo-password" required type="password" autocomplete="off" autocapitalize="none" spellcheck="false"><button id="velo-show-password" class="button secondary" type="button" aria-controls="velo-password" aria-pressed="false">Show password</button><span class="field-help">Kept in this page until you clear it or reload; not saved to creds.json.</span></label>
             </fieldset></form>
           </section>
         <section class="deployment card velo-top-card" aria-labelledby="velo-activate-heading">
