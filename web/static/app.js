@@ -448,10 +448,13 @@ async function refreshVeloLibrary() {
     const data = await api('/api/velo/downloads');
     veloFiles = data.files;
     const selected = $('velo-saved-file').value;
+    const updateSelected = $('velo-update-filename').value;
     $('velo-saved-file').replaceChildren(new Option('Select a downloaded file', ''));
+    $('velo-update-filename').replaceChildren(new Option('Select a downloaded file', ''));
     $('velo-library-files').replaceChildren();
     for (const file of data.files) {
       $('velo-saved-file').add(new Option(file.name, file.name));
+      $('velo-update-filename').add(new Option(file.name, file.name));
       const row = document.createElement('tr');
       const name = document.createElement('td'); name.className = 'file-name'; name.textContent = file.name + (file.in_use ? ' · In use' : '');
       const size = document.createElement('td'); size.textContent = fileSize(file.size);
@@ -477,6 +480,7 @@ async function refreshVeloLibrary() {
       actions.append(use, remove); row.append(name,size,date,actions); $('velo-library-files').append(row);
     }
     if (data.files.some(file => file.name === selected)) $('velo-saved-file').value = selected;
+    if (data.files.some(file => file.name === updateSelected)) $('velo-update-filename').value = updateSelected;
     $('velo-library-count').textContent = `${data.files.length} files · ${fileSize(data.files.reduce((total,file) => total+file.size,0))}`;
     $('velo-library-empty').hidden = data.files.length > 0;
     $('velo-library-scroll').hidden = data.files.length === 0;

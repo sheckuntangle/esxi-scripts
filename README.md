@@ -190,9 +190,10 @@ default. The GUI does not enable root access or change the edge's SSH configurat
    from logs. Verify the resulting activation status in the VCO.
 3. Under **SCP upload**, select a saved file and click **Upload to /tmp**.
    Uploading only copies the file and never starts the updater.
-4. Separately, under **Run swupdater**, enter the name of a file already in the
-   edge's `/tmp` directory and click **Run swupdater**. No local downloaded copy
-   or preceding upload job is required. This action requires root.
+4. Separately, under **Run swupdater**, select an image from the same downloaded
+   Velo file list used by SCP upload, then click **Run swupdater**. The file must
+   already exist under the same name in the edge's `/tmp` directory; this action
+   does not upload it. This action requires root.
 
 Transfers use legacy SCP over SSH port 22; an SFTP subsystem is not required.
 The upload action checks SCP support and available `/tmp` space, uploads into a
