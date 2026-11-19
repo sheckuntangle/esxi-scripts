@@ -123,9 +123,11 @@ The password is submitted to the GUI, kept in the job's memory, redacted from jo
 output, and not saved to disk. An HTTP GUI connection does not protect the
 password in transit; use HTTPS or an SSH tunnel on untrusted networks.
 
-Unknown device host keys are automatically trusted on first use by explicit user
-request. A first-connection attacker could impersonate an edge and receive its
-password or update file. Recorded changed keys are rejected. `velo_known_hosts`
+Unknown and changed Velo device host keys are automatically trusted by explicit
+user request to support reused lab IPs. An attacker impersonating an edge could
+receive its password, activation key, or update file, including on subsequent
+connections. Changed keys trigger a logged, one-time SSH reconnection before
+any command executes; only the target host's saved keys are replaced. `velo_known_hosts`
 is mode 0600, persisted outside the image, and ignored by Git. This does not weaken
 ESXi host-key verification. Legacy SSH algorithms are not automatically enabled.
 
@@ -149,11 +151,12 @@ edge validation by the operator.
 
 Static scanning flags `AutoAddPolicy` (Bandit B507) as high severity. This is an
 intentional, documented exception to implement the requested automatic acceptance
-of unknown Velo keys. It does not bypass checks for a changed recorded key.
+of unknown Velo keys and automatic replacement of changed Velo keys. ESXi
+key checks remain unchanged.
 Remote command execution flags (B601) were reviewed for per-argument quoting;
 `/tmp` flags (B108) correspond to the requested destination and private staging.
 
-Velo verification: 114 unit/regression tests pass locally. Browser fixture checks
+Velo verification: 116 unit/regression tests pass locally. Browser fixture checks
 cover the three tabs, tracked downloads, separate transfer/update output and actions,
 reconnect, shared job locks, deletion, and desktop/mobile layout. The rebuilt
 image dependency audit reports no known Python package vulnerabilities as of

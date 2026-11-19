@@ -227,9 +227,10 @@ version and health before retrying; updates are never automatically retried.
 No successful update has been validated on a real edge by the automated tests.
 
 Unknown Velo SSH host keys are accepted automatically and recorded in the
-persistent, owner-only `velo_known_hosts` file. Previously known changed keys
-are rejected. Verify a changed fingerprint out of band before correcting that
-file. This trust-on-first-use policy applies only to Velo actions; ESXi SSH host
+persistent, owner-only `velo_known_hosts` file. When a lab IP is reused and its
+key changes, the tool logs the change, replaces that host's saved keys, and
+reconnects once before running any command. Other hosts' keys are preserved.
+This automatic trust applies only to Velo actions; ESXi SSH host
 key verification is unchanged. Device connections require SSH/SCP access from
 the Docker server. Downloads use the same size/free-space limits as the OVA
 library. Downloads and device actions share the single-job lock with ESXi actions.

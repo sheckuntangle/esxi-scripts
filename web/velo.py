@@ -144,12 +144,29 @@ def device_session(root, job, phase):
         finally:
             os.close(fd)
         client.load_host_keys(str(keys))
-        # Trust on first use, as requested. Previously recorded changed keys still fail.
+        # Automatically trust lab device keys, including reused IPs, as requested.
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         job.emit('Connecting to Velo ' + credentials['host'] + ':22 as ' + credentials['user'], phase=phase, percent=0)
-        job.emit('Unknown SSH host keys are accepted and saved automatically; changed keys are rejected.')
-        client.connect(credentials['host'], username=credentials['user'], password=credentials['password'],
-                       look_for_keys=False, allow_agent=False, timeout=20, banner_timeout=20, auth_timeout=20)
+        job.emit('Unknown SSH host keys are saved automatically; changed Velo keys are replaced for reused lab IPs.')
+        connect_options = dict(username=credentials['user'], password=credentials['password'],
+                               look_for_keys=False, allow_agent=False, timeout=20, banner_timeout=20, auth_timeout=20)
+        try:
+            client.connect(credentials['host'], **connect_options)
+        except paramiko.BadHostKeyException:
+            # Retry only the SSH handshake, before any remote command is executed.
+            client.close()
+            job.emit('Velo SSH host key changed for ' + credentials['host'] +
+                     '; replacing its saved key automatically and reconnecting once.')
+            client = paramiko.SSHClient()
+            client.load_host_keys(str(keys))
+            host_keys = client.get_host_keys()
+            while credentials['host'] in host_keys:
+                del host_keys[credentials['host']]
+            # Persist removal so Paramiko's save-time reload cannot restore stale key types.
+            host_keys.save(str(keys))
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            # AutoAddPolicy records the newly negotiated key and preserves other hosts.
+            client.connect(credentials['host'], **connect_options)
         client.get_transport().set_keepalive(30)
         banner = client.get_transport().get_banner()
         if banner:
@@ -158,7 +175,7 @@ def device_session(root, job, phase):
     except paramiko.AuthenticationException:
         raise VeloError('Velo SSH authentication failed. Check the username, password, and root SSH login configuration.') from None
     except paramiko.BadHostKeyException:
-        raise VeloError('The Velo SSH host key changed. Verify the device identity before updating velo_known_hosts.') from None
+        raise VeloError('The Velo SSH host key changed again during reconnection. Check device connectivity before retrying.') from None
     except VeloError:
         raise
     except Exception:

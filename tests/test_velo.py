@@ -119,12 +119,46 @@ class VeloTests(unittest.TestCase):
         self.assertFalse(any(call.args[1][0] in ('mv','/root/swupdater') for call in command.call_args_list))
 
     @patch('web.velo.paramiko.SSHClient')
-    def test_changed_host_key_is_rejected_and_authentication_failure_sanitized(self, ssh):
+    def test_connection_failures_are_sanitized(self, ssh):
         for error in (paramiko.AuthenticationException('device-secret'),paramiko.BadHostKeyException('edge',Mock(),Mock())):
             ssh.return_value.connect.side_effect=error
             ssh.return_value.get_transport.return_value=None
             with self.assertRaises(velo.VeloError) as caught:velo.transfer(self.root,self.job(),self.path)
             self.assertNotIn('device-secret',str(caught.exception))
+
+    def test_changed_key_is_replaced_once_and_other_hosts_preserved(self):
+        old=paramiko.RSAKey.generate(1024);new=paramiko.RSAKey.generate(1024)
+        keys=paramiko.HostKeys();keys.add('edge.test',old.get_name(),old);keys.add('other.test',old.get_name(),old)
+        alternate=paramiko.ECDSAKey.generate();keys.add('edge.test',alternate.get_name(),alternate)
+        path=self.root/'velo_known_hosts';keys.save(str(path))
+        first=paramiko.SSHClient();second=paramiko.SSHClient()
+        first.connect=Mock(side_effect=paramiko.BadHostKeyException('edge.test',new,old))
+        second._transport=Mock();second._transport.get_banner.return_value=None
+        def connect(host,**kwargs):second._policy.missing_host_key(second,host,new)
+        second.connect=Mock(side_effect=connect)
+        job=self.job()
+        with patch('web.velo.paramiko.SSHClient',side_effect=[first,second]):
+            with velo.device_session(self.root,job,'activate') as client:
+                self.assertIs(client,second)
+                saved=paramiko.HostKeys(str(path))
+                self.assertEqual(saved['edge.test'][new.get_name()],new)
+                self.assertEqual(list(saved['edge.test']),[new.get_name()])
+                self.assertEqual(saved['other.test'][old.get_name()],old)
+        first.connect.assert_called_once();second.connect.assert_called_once()
+        self.assertTrue(any('replacing its saved key' in line['text'] for line in job.lines))
+        self.assertEqual(path.stat().st_mode & 0o777,0o600)
+
+    @patch('web.velo.paramiko.SSHClient')
+    def test_repeated_key_change_stops_before_device_commands(self, ssh):
+        first=MagicMock();second=MagicMock();ssh.side_effect=[first,second]
+        error=paramiko.BadHostKeyException('edge.test',Mock(),Mock())
+        first.connect.side_effect=error;second.connect.side_effect=error
+        with patch('web.velo.command') as command:
+            with self.assertRaisesRegex(velo.VeloError,'changed again'):
+                velo.activate(self.root,self.job(operation='activate',vco='vco.example.com',activation_key='KEY'))
+            command.assert_not_called()
+        self.assertEqual(ssh.call_count,2)
+        first.close.assert_called_once();second.close.assert_called_once()
 
     def test_command_quotes_busybox_arguments_streams_output_and_rejects_missing_exit_status(self):
         client=Mock(); channel=client.get_transport.return_value.open_session.return_value

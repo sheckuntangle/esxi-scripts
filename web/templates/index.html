@@ -144,7 +144,7 @@
             <button id="velo-activate-button" class="button primary" type="submit">Activate device</button>
           </fieldset></form>
         </section>
-        <div class="velo-note card"><strong>Root account setup required</strong><p>For Velo edges running OpenWrt/Dropbear. This assumes root SSH login is configured with a password. The vcadmin user cannot perform this workflow by default. Unknown SSH host keys are accepted and saved automatically; a changed key stops the connection. The edge must support SCP; /tmp is usually RAM-backed and its free space is checked before upload.</p></div>
+        <div class="velo-note card"><strong>Root account setup required</strong><p>For Velo edges running OpenWrt/Dropbear. This assumes root SSH login is configured with a password. The vcadmin user cannot perform this workflow by default. Unknown SSH host keys are saved automatically; changed Velo keys are replaced automatically for reused lab IPs. The edge must support SCP; /tmp is usually RAM-backed and its free space is checked before upload.</p></div>
         <section class="library card" aria-labelledby="velo-library-heading">
           <div class="section-heading"><div class="heading-icon">▤</div><div><h2 id="velo-library-heading">Downloaded Velo files</h2><p>Download update files, then select one to send to a device.</p></div><span id="velo-library-count" class="pill">0 files</span><button id="velo-refresh-library" class="button secondary" type="button">Refresh</button></div>
           <form id="velo-download-form"><fieldset id="velo-download-fields">
